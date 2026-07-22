@@ -1,0 +1,21 @@
+# nix build outputs (symlinks into /nix/store)
+/result
+/result-*
+
+# store-path symlink to the logos rust SDK source (staged by the builder)
+/logos-rust-sdk-src
+
+# generated C-ABI scaffold (emitted by the builder)
+/rust-lib/generated
+
+# rust build output
+target/
+
+# built module bundles
+*.lgx
+
+# macOS
+.DS_Store
+
+# Context+ MCP cache
+.mcp_data/

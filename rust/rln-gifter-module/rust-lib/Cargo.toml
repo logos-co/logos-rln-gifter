@@ -1,0 +1,25 @@
+[package]
+name = "rln_gifter_module"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+crate-type = ["staticlib"]
+
+[profile.release]
+# Abort (not unwind) across the FFI boundary — a Rust panic must never unwind
+# into the C++ host.
+panic = "abort"
+
+[dependencies]
+serde_json = "1"
+hex = "0.4"
+base64 = "0.22"
+# Gifter server auth crypto: EIP-191 recover (k256 + keccak) and keycard
+# attestation verify (vendored, no PCSC dependency).
+k256 = { version = "0.13", features = ["ecdsa"] }
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+keycard_attest = { path = "vendor/keycard-attest" }
+logos-rust-sdk = { path = "../logos-rust-sdk-src" }

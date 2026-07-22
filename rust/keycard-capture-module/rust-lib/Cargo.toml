@@ -1,0 +1,19 @@
+[package]
+name = "keycard_capture_module"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+crate-type = ["staticlib"]
+
+[profile.release]
+panic = "abort"
+
+[dependencies]
+serde_json = "1"
+hex = "0.4"
+keycard_attest = { path = "vendor/keycard-attest" }
+keycard_client = { path = "vendor/keycard-client" }
+logos-rust-sdk = { path = "../logos-rust-sdk-src" }
