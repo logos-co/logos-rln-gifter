@@ -1,0 +1,15 @@
+[package]
+name = "keycard_client"
+version = "0.1.0"
+edition = "2021"
+description = "In-process Keycard PC/SC client (connect/select/identify), vendored from keycard_rln"
+
+[dependencies]
+pcsc = "2"
+aes = "0.8"
+pbkdf2 = "0.12"
+sha2 = "0.10"
+k256 = { version = "0.13", features = ["ecdh"] }
+rand = "0.8"
+unicode-normalization = "0.1"
+hex = "0.4"
