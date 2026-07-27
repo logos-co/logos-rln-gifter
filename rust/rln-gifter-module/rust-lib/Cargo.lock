@@ -214,8 +214,8 @@ dependencies = [
 [[package]]
 name = "keycard_attest"
 version = "0.1.0"
+source = "git+https://github.com/logos-co/logos-rln-gifter?tag=keycard-crates-v0.1.0#8f9ca78babf4f93460e605440dad499a41bb5847"
 dependencies = [
- "hex",
  "k256",
  "sha2",
  "tiny-keccak",
