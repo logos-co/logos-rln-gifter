@@ -1,0 +1,4 @@
+[workspace]
+resolver = "2"
+members = ["crates/keycard-attest", "crates/keycard-client"]
+exclude = ["rust"]

@@ -1,0 +1,23 @@
+{
+  "name": "keycard_capture_module",
+  "version": "0.1.0",
+  "description": "Keycard IDENTIFY_CARD attestation capture for gifted RLN registration (client-side PC/SC)",
+  "author": "Logos",
+  "type": "core",
+  "interface": "cdylib",
+  "category": "blockchain",
+  "main": "keycard_capture_module_plugin",
+  "dependencies": [],
+  "include": [],
+  "capabilities": [],
+
+  "codegen": {
+    "rust": { "crate": "rust-lib", "trait": "KeycardCaptureModule" }
+  },
+
+  "nix": {
+    "external_libraries": [],
+    "packages": { "build": [], "runtime": [] },
+    "cmake": { "find_packages": [], "extra_include_dirs": [] }
+  }
+}

@@ -1,0 +1,13 @@
+[package]
+name = "keycard_attest"
+version = "0.1.0"
+edition = "2021"
+description = "Keycard IDENTIFY_CARD attestation verification (vendored from keycard_rln::attest)"
+
+[dependencies]
+k256 = { version = "0.13", features = ["ecdsa"] }
+sha2 = "0.10"
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+
+[dev-dependencies]
+hex = "0.4"

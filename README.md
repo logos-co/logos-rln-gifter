@@ -42,6 +42,16 @@ client                                  gifter (funded wallet)
   client↔gifter auth — RLN proofs are untouched.
 - **One-shot allowlist** (`EthAllowlistAuth`): each address gets exactly one
   membership; a consumed set rejects repeats.
+- **Keycard attestation** (`src/rln_gifter/keycard_attest.nim`, pluggable
+  alongside the allowlist): a client proves it holds a genuine
+  [Keycard](https://keycard.tech) by sending the raw `IDENTIFY_CARD` TLV signed
+  over the commitment-bound challenge
+  `SHA256("logos/rln/keycard-attest/1" || id_commitment)`. The gifter recovers
+  the vendor CA from the card certificate, checks it against a trusted-CA set,
+  verifies the challenge signature, and derives the once-per-card nullifier
+  `keccak256(ident_pub)` — stable across factory resets, so each card claims
+  exactly one membership (`KeycardAttestAuth`, optionally persisted to an
+  append-only file across restarts).
 - **Delegated registration** (`RegisterMemberHandler`): the protocol never
   touches a chain. The host receives `(identityCommitment, rateLimit)` and
   returns the allocation (`leafIndex`, `merkleRoot`, `blockNumber`,
@@ -55,6 +65,8 @@ client                                  gifter (funded wallet)
 | `src/rln_gifter/client.nim` | `requestMembership`: dial, sign, request, decode |
 | `src/rln_gifter/rpc.nim`, `rpc_codec.nim` | request/response types + protobuf codec (`/logos/rln/membership/1.0.0`) |
 | `src/rln_gifter/eip191.nim` | EIP-191 sign / recover primitives |
+| `src/rln_gifter/keycard_attest.nim` | Keycard `IDENTIFY_CARD` attestation verifier (TLV parse, CA recovery, challenge binding, nullifier) |
+| `src/rln_gifter/keycard_auth.nim` | keycard auth state: trusted CAs + consumed nullifiers (optional persistence) |
 | `cbind/cbind_gifter.nim`, `cbind/libp2p_gifter.h` | C surface for host applications (below) |
 
 ## C surface (`libp2p_gifter_*`)
@@ -64,14 +76,16 @@ into the mix cbind library (mix-rln-spam-protection-plugin's `cbind-rln`
 output bundles mix + RLN + gifter into one `libp2p.so`):
 
 - `libp2p_gifter_serve(ctx, config_json, register_cb, mount_cb, ...)` — mount
-  the gifter with an allowlist. The register callback fires **on the libp2p
+  the gifter with an `allowlist` (EIP-191) and/or `trustedCAs` (keycard
+  attestation). The register callback fires **on the libp2p
   thread**, where calling back into the host runtime may deadlock — it must
   only enqueue; the host does the on-chain registration on its own thread and
   finishes with…
 - `libp2p_gifter_complete(handle, result_json)` — deliver the allocation
   result for a pending registration.
 - `libp2p_gifter_request(ctx, args_json, ...)` — client side: obtain a gifted
-  membership from a gifter peer.
+  membership from a gifter peer, authenticating with `authKey` (EIP-191) or
+  `attestation` (hex keycard TLV, takes precedence).
 
 Malformed serve-config JSON fails the mount rather than mounting without auth.
 Every export registers the calling host thread with the Nim GC via the mix
@@ -81,7 +95,7 @@ cbind's `initializeLibrary` (the superset library builds with `--noMain`).
 
 ```bash
 nimble install -d
-nimble test        # EIP-191 vectors + codec round-trips
+nimble test        # EIP-191 + keycard attestation vectors, codec round-trips
 ```
 
 nim-libp2p is pinned to the same rev as `libp2p_mix` so a superset build
