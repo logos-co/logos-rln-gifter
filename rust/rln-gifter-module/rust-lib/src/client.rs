@@ -1,7 +1,8 @@
-// Gifter CLIENT: generate an RLN identity locally, request a gifted membership
-// from a gifter peer over libp2p, and adopt the granted leaf. Replaces
-// libp2p_module.rlnGifterRequest — the protocol now runs over libp2p_module's
-// GENERIC protocolRequest bridge, with no gifter code in that module.
+// Gifter CLIENT: request a gifted membership for an identity commitment from
+// a gifter peer over libp2p_module's generic protocolRequest bridge. The
+// commitment is normally supplied by the caller (the RLN membership module,
+// which keeps the identity secret); optionally captures the keycard
+// attestation bound to it via keycard_capture_module.
 // FEATURE: RLN membership gifter client
 
 use serde_json::{json, Value};
@@ -14,35 +15,72 @@ use crate::wire::{RlnGifterRequest, RlnGifterResponse, KEYCARD_ATTEST_AUTH_TYPE,
 const GEN_TIMEOUT_MS: i32 = 30_000;
 const REQUEST_TIMEOUT_MS: i64 = 190_000;
 const REQUEST_CALL_TIMEOUT_MS: i32 = 205_000;
+// In-module keycard capture (captureAttestation): the caller gates on card
+// presence first, so this covers connect+select+IDENTIFY plus a slow tap.
+const CAPTURE_TIMEOUT_MS: i32 = 120_000;
 
 /// Client entry point (the trait's `request`): args
-/// `{gifterPeerId, gifterMultiaddr, config?, seed, rate?, authKey?, attestation?}`.
+/// `{gifterPeerId, gifterMultiaddr, config?, identityCommitment?, seed?, rate?,
+///  authKey?, attestation?, captureAttestation?}`.
 /// Returns `{leaf_index, id_commitment, auth_success, identity_adopted, tx_hash?, config_account?}`.
 pub fn request(args_json: &str) -> Result<Value, String> {
     let a: Value = serde_json::from_str(args_json).map_err(|e| format!("request args: {e}"))?;
     let gifter_peer_id = a.get("gifterPeerId").and_then(Value::as_str).ok_or("missing gifterPeerId")?;
     let gifter_multiaddr =
         a.get("gifterMultiaddr").and_then(Value::as_str).ok_or("missing gifterMultiaddr")?;
-    let seed = a.get("seed").and_then(Value::as_str).ok_or("missing seed")?;
+    let seed = a.get("seed").and_then(Value::as_str).unwrap_or("");
+    let provided_commitment =
+        a.get("identityCommitment").and_then(Value::as_str).unwrap_or("");
     let rate = a.get("rate").and_then(Value::as_u64).unwrap_or(0);
     let auth_key = a.get("authKey").and_then(Value::as_str).unwrap_or("");
     let attestation = a.get("attestation").and_then(Value::as_str).unwrap_or("");
 
-    // 1. Generate the RLN identity locally — the secret hash never leaves here.
-    let idv = lp::call_module_json(lp::RLN_MODULE, "generate_identity", &json!([seed]), GEN_TIMEOUT_MS)?;
-    let id_commitment_hex = idv
-        .get("id_commitment")
-        .and_then(Value::as_str)
-        .ok_or("generate_identity: no id_commitment")?
-        .to_string();
+    // 1. Obtain the RLN identity commitment. Preferred (full spec alignment):
+    //    the caller — the RLN membership module — generated the credential
+    //    in-module and passes its commitment here, so the identity secret never
+    //    leaves that module. Legacy fallback: derive it from a seed via the
+    //    sibling's generate_identity.
+    let id_commitment_hex = if !provided_commitment.is_empty() {
+        provided_commitment.trim_start_matches("0x").to_string()
+    } else if !seed.is_empty() {
+        let idv =
+            lp::call_module_json(lp::RLN_MODULE, "generate_identity", &json!([seed]), GEN_TIMEOUT_MS)?;
+        idv.get("id_commitment")
+            .and_then(Value::as_str)
+            .ok_or("generate_identity: no id_commitment")?
+            .to_string()
+    } else {
+        return Err("request needs identityCommitment or seed".into());
+    };
     let id_commitment =
         hex::decode(&id_commitment_hex).map_err(|e| format!("id_commitment hex: {e}"))?;
 
-    // 2. Auth payload: the keycard attestation TLV (passthrough) or, for the
+    // 2. Auth payload: an explicitly supplied keycard attestation TLV, one this
+    //    module captures itself (captureAttestation — the card signs the
+    //    challenge bound to the commitment being registered, so a caller like
+    //    the membership module can hand over only the commitment), or, for the
     //    eth-allowlist path, an EIP-191 signature (client-side signing TBD).
+    let capture = a.get("captureAttestation").and_then(Value::as_bool).unwrap_or(false);
     let (auth_type, auth_payload) = if !attestation.is_empty() {
         let tlv = hex::decode(attestation.trim_start_matches("0x"))
             .map_err(|e| format!("attestation hex: {e}"))?;
+        (KEYCARD_ATTEST_AUTH_TYPE, tlv)
+    } else if capture {
+        let cap = lp::call_module_json(
+            lp::CAPTURE_MODULE,
+            "capture_attestation",
+            &json!([id_commitment_hex]),
+            CAPTURE_TIMEOUT_MS,
+        )?;
+        if let Some(e) = cap.get("error").and_then(Value::as_str) {
+            return Err(format!("keycard capture: {e}"));
+        }
+        let tlv_hex = cap
+            .get("attestation_tlv")
+            .and_then(Value::as_str)
+            .ok_or("capture_attestation: no attestation_tlv")?;
+        let tlv = hex::decode(tlv_hex.trim_start_matches("0x"))
+            .map_err(|e| format!("attestation tlv hex: {e}"))?;
         (KEYCARD_ATTEST_AUTH_TYPE, tlv)
     } else if !auth_key.is_empty() {
         return Err("eth-allowlist client signing is not implemented in rln_gifter_module".into());

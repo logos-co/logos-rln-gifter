@@ -11,7 +11,10 @@ mod wire;
 
 pub trait RlnGifterModule: Send + 'static {
     /// Client: request a gifted membership from a gifter peer. Args
-    /// `{gifterPeerId, gifterMultiaddr, config?, seed, rate?, authKey?, attestation?}`
+    /// `{gifterPeerId, gifterMultiaddr, config?, identityCommitment?, seed?,
+    ///  rate?, authKey?, attestation?, captureAttestation?}` — identityCommitment
+    /// is the primary identity source (seed is a legacy fallback deriving one
+    /// via the rln module)
     /// → `{leaf_index, id_commitment, auth_success, identity_adopted, tx_hash?}`.
     fn request(&mut self, args_json: String) -> String;
     /// Gifter node: mount the gifter protocol and serve inbound requests. Args

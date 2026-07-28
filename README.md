@@ -13,10 +13,13 @@ delegated to `liblogos_rln_module`; RLN proof generation and verification
 
 - **`rln_gifter_module`** (`rust/rln-gifter-module`) — the gifter protocol,
   client and server, exposing two methods:
-  - `request(args_json)` — client side. Generates an RLN identity locally (via
-    `liblogos_rln_module.generate_identity`), builds the request, sends it to a
-    gifter peer over `libp2p_module`, and returns the granted allocation. The
-    identity secret stays on the client.
+  - `request(args_json)` — client side. Takes the caller's RLN identity
+    commitment (normally supplied by the RLN membership module, which keeps
+    the identity secret; a legacy `seed` argument instead derives one via
+    `liblogos_rln_module.generate_identity`), optionally captures a Keycard
+    attestation bound to it, sends the request to a gifter peer over
+    `libp2p_module`, and returns the granted allocation. The identity secret
+    never reaches this module.
   - `serve(args_json)` — gifter side. Mounts `/logos/rln/membership/1.0.0`,
     authenticates each request, and registers the commitment on-chain via
     `liblogos_rln_module.register_member` on a single serialized worker.
