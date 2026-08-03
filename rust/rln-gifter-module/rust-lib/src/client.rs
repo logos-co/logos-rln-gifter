@@ -1,27 +1,29 @@
 // Gifter CLIENT: request a gifted membership for an identity commitment from
 // a gifter peer over libp2p_module's generic protocolRequest bridge. The
 // commitment is normally supplied by the caller (the RLN membership module,
-// which keeps the identity secret); optionally captures the keycard
-// attestation bound to it via keycard_capture_module.
+// which keeps the identity secret). Auth is vector-agnostic: the payload is
+// supplied raw or produced by an rln_auth_vector provider module named in the
+// request — this module knows no vector by name.
 // FEATURE: RLN membership gifter client
 
+use rln_auth_vector::ProduceRequest;
 use serde_json::{json, Value};
 
 use crate::lp::{self, b64, b64_decode};
-use crate::wire::{RlnGifterRequest, RlnGifterResponse, KEYCARD_ATTEST_AUTH_TYPE, RLN_GIFTER_CODEC};
+use crate::wire::{RlnGifterRequest, RlnGifterResponse, RLN_GIFTER_CODEC};
 
 // generate_identity is fast; the gifter round trip (dial + on-chain register on
 // the server) can run up to ~3 minutes; adoption is a quick local set.
 const GEN_TIMEOUT_MS: i32 = 30_000;
 const REQUEST_TIMEOUT_MS: i64 = 190_000;
 const REQUEST_CALL_TIMEOUT_MS: i32 = 205_000;
-// In-module keycard capture (captureAttestation): the caller gates on card
-// presence first, so this covers connect+select+IDENTIFY plus a slow tap.
-const CAPTURE_TIMEOUT_MS: i32 = 120_000;
+// Producer plugins may drive hardware (keycard capture covers
+// connect+select+IDENTIFY plus a slow tap), so the budget is generous.
+const PRODUCE_TIMEOUT_MS: i32 = 120_000;
 
 /// Client entry point (the trait's `request`): args
 /// `{gifterPeerId, gifterMultiaddr, config?, identityCommitment?, seed?, rate?,
-///  authKey?, attestation?, captureAttestation?}`.
+///  authType?, authPayload?, authProvider?, authArgs?}`.
 /// Returns `{leaf_index, id_commitment, auth_success, identity_adopted, tx_hash?, config_account?}`.
 pub fn request(args_json: &str) -> Result<Value, String> {
     let a: Value = serde_json::from_str(args_json).map_err(|e| format!("request args: {e}"))?;
@@ -32,8 +34,6 @@ pub fn request(args_json: &str) -> Result<Value, String> {
     let provided_commitment =
         a.get("identityCommitment").and_then(Value::as_str).unwrap_or("");
     let rate = a.get("rate").and_then(Value::as_u64).unwrap_or(0);
-    let auth_key = a.get("authKey").and_then(Value::as_str).unwrap_or("");
-    let attestation = a.get("attestation").and_then(Value::as_str).unwrap_or("");
 
     // 1. Obtain the RLN identity commitment. Preferred (full spec alignment):
     //    the caller — the RLN membership module — generated the credential
@@ -55,45 +55,54 @@ pub fn request(args_json: &str) -> Result<Value, String> {
     let id_commitment =
         hex::decode(&id_commitment_hex).map_err(|e| format!("id_commitment hex: {e}"))?;
 
-    // 2. Auth payload: an explicitly supplied keycard attestation TLV, one this
-    //    module captures itself (captureAttestation — the card signs the
-    //    challenge bound to the commitment being registered, so a caller like
-    //    the membership module can hand over only the commitment), or, for the
-    //    eth-allowlist path, an EIP-191 signature (client-side signing TBD).
-    let capture = a.get("captureAttestation").and_then(Value::as_bool).unwrap_or(false);
-    let (auth_type, auth_payload) = if !attestation.is_empty() {
-        let tlv = hex::decode(attestation.trim_start_matches("0x"))
-            .map_err(|e| format!("attestation hex: {e}"))?;
-        (KEYCARD_ATTEST_AUTH_TYPE, tlv)
-    } else if capture {
-        let cap = lp::call_module_json(
-            lp::CAPTURE_MODULE,
-            "capture_attestation",
-            &json!([id_commitment_hex]),
-            CAPTURE_TIMEOUT_MS,
-        )?;
-        if let Some(e) = cap.get("error").and_then(Value::as_str) {
-            return Err(format!("keycard capture: {e}"));
+    // 2. Auth vector + payload. `authType` names the vector in the wire's
+    //    OPEN authentication_type vocabulary — any type the target gifter is
+    //    configured to verify (its authVerifiers modules); this client never
+    //    gatekeeps it and knows no vector by name. The payload comes from
+    //    `authPayload` (raw hex, verbatim — material the application produced
+    //    itself, e.g. an external wallet signature) or from an `authProvider`
+    //    module implementing the rln_auth_vector producer contract
+    //    (PRODUCE_METHOD, `authArgs` forwarded verbatim — e.g. keycard
+    //    capture). No authType at all is an UNAUTHENTICATED request for an
+    //    open gifter: empty type, empty payload.
+    let auth_type_req = a.get("authType").and_then(Value::as_str).unwrap_or("");
+    let auth_payload_hex = a.get("authPayload").and_then(Value::as_str).unwrap_or("");
+    let auth_provider = a.get("authProvider").and_then(Value::as_str).unwrap_or("");
+    let auth_payload: Vec<u8> = if auth_type_req.is_empty() {
+        if !auth_payload_hex.is_empty() || !auth_provider.is_empty() {
+            return Err("authPayload/authProvider need an explicit authType".into());
         }
-        let tlv_hex = cap
-            .get("attestation_tlv")
-            .and_then(Value::as_str)
-            .ok_or("capture_attestation: no attestation_tlv")?;
-        let tlv = hex::decode(tlv_hex.trim_start_matches("0x"))
-            .map_err(|e| format!("attestation tlv hex: {e}"))?;
-        (KEYCARD_ATTEST_AUTH_TYPE, tlv)
-    } else if !auth_key.is_empty() {
-        return Err("eth-allowlist client signing is not implemented in rln_gifter_module".into());
+        Vec::new()
+    } else if !auth_payload_hex.is_empty() {
+        hex::decode(auth_payload_hex.trim_start_matches("0x"))
+            .map_err(|e| format!("authPayload hex: {e}"))?
+    } else if !auth_provider.is_empty() {
+        let prod_req = ProduceRequest {
+            auth_type: auth_type_req.to_string(),
+            id_commitment_hex: id_commitment_hex.clone(),
+            args: a.get("authArgs").cloned(),
+        };
+        let prod_json =
+            serde_json::to_string(&prod_req).map_err(|e| format!("produce request: {e}"))?;
+        let reply = lp::call_module_json(
+            auth_provider,
+            rln_auth_vector::PRODUCE_METHOD,
+            &json!([prod_json]),
+            PRODUCE_TIMEOUT_MS,
+        )?;
+        let reply = rln_auth_vector::parse_produce_reply(&reply)
+            .map_err(|e| format!("auth provider {auth_provider}: {e}"))?;
+        hex::decode(reply.payload_hex.trim_start_matches("0x"))
+            .map_err(|e| format!("auth provider payload hex: {e}"))?
     } else {
-        // Open gifter (empty allowlist / no auth): send an empty keycard payload.
-        (KEYCARD_ATTEST_AUTH_TYPE, Vec::new())
+        return Err(format!("authType '{auth_type_req}' needs authPayload or authProvider"));
     };
 
     // 3. One request→response over the generic libp2p bridge.
     let request_id = format!("gift-{}", &id_commitment_hex[..id_commitment_hex.len().min(16)]);
     let req = RlnGifterRequest {
         request_id: request_id.clone(),
-        authentication_type: auth_type.as_bytes().to_vec(),
+        authentication_type: auth_type_req.as_bytes().to_vec(),
         authentication_payload: auth_payload,
         identity_commitment: id_commitment,
         rate_limit: if rate > 0 { Some(rate) } else { None },

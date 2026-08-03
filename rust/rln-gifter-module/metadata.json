@@ -1,7 +1,7 @@
 {
   "name": "rln_gifter_module",
-  "version": "0.1.0",
-  "description": "RLN membership gifter (LIP-158): client requests a gifted membership over libp2p; gifter serve authenticates (keycard attestation / eth allowlist) and registers on-chain",
+  "version": "0.2.0",
+  "description": "RLN membership gifter over libp2p: vector-agnostic client requests + gifter serve (auth via pluggable rln_auth_vector modules)",
   "author": "Logos",
   "type": "core",
   "interface": "cdylib",
@@ -10,14 +10,21 @@
   "dependencies": [],
   "include": [],
   "capabilities": [],
-
   "codegen": {
-    "rust": { "crate": "rust-lib", "trait": "RlnGifterModule" }
+    "rust": {
+      "crate": "rust-lib",
+      "trait": "RlnGifterModule"
+    }
   },
-
   "nix": {
     "external_libraries": [],
-    "packages": { "build": [], "runtime": [] },
-    "cmake": { "find_packages": [], "extra_include_dirs": [] }
+    "packages": {
+      "build": [],
+      "runtime": []
+    },
+    "cmake": {
+      "find_packages": [],
+      "extra_include_dirs": []
+    }
   }
 }

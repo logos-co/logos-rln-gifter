@@ -18,11 +18,12 @@ use serde_json::Value;
 
 // lp targets, deliberately NOT declared in metadata.json dependencies: the
 // per-target clients are created lazily, so a deployment missing one (e.g. a
-// headless gifter server with no PC/SC capture module) still loads and only
-// fails if that target is actually called.
+// headless gifter server without some vector's producer module) still loads
+// and only fails if that target is actually called. Auth vector modules are
+// named by CONFIGURATION (authProvider / authVerifiers), never by constants
+// here — this module knows no vector by name.
 pub const RLN_MODULE: &str = "liblogos_rln_module";
 pub const LIBP2P_MODULE: &str = "libp2p_module";
-pub const CAPTURE_MODULE: &str = "keycard_capture_module";
 
 /// Standard base64 (padded) — the encoding libp2p_module's stream JSON wrappers
 /// use for opaque payloads on the wire.

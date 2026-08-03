@@ -1,0 +1,20 @@
+[package]
+name = "eth_auth_module"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[lib]
+crate-type = ["staticlib"]
+
+[profile.release]
+panic = "abort"
+
+[dependencies]
+serde_json = "1"
+hex = "0.4"
+k256 = { version = "0.13", features = ["ecdsa"] }
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+rln_auth_vector = { git = "https://github.com/logos-co/logos-rln-gifter", rev = "79b90eef9423ce6a9000182a2d343be7eacd8d6b", package = "rln_auth_vector" }
+logos-rust-sdk = { path = "../logos-rust-sdk-src" }

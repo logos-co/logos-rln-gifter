@@ -1,6 +1,6 @@
 [package]
 name = "rln_gifter_module"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [workspace]
@@ -17,9 +17,7 @@ panic = "abort"
 serde_json = "1"
 hex = "0.4"
 base64 = "0.22"
-# Gifter server auth crypto: EIP-191 recover (k256 + keccak) and keycard
-# attestation verify (shared crate, no PCSC dependency).
-k256 = { version = "0.13", features = ["ecdsa"] }
-tiny-keccak = { version = "2.0.2", features = ["keccak"] }
-keycard_attest = { git = "https://github.com/logos-co/logos-rln-gifter", tag = "keycard-crates-v0.1.0", package = "keycard_attest" }
+# No auth crypto here: vector verification/production lives in plugin modules
+# speaking the rln_auth_vector contract.
+rln_auth_vector = { git = "https://github.com/logos-co/logos-rln-gifter", rev = "79b90eef9423ce6a9000182a2d343be7eacd8d6b", package = "rln_auth_vector" }
 logos-rust-sdk = { path = "../logos-rust-sdk-src" }
