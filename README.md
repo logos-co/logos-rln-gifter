@@ -14,13 +14,11 @@ delegated to `liblogos_rln_module`; RLN proof generation and verification
 - **`rln_gifter_module`** (`rust/rln-gifter-module`) — the gifter protocol,
   client and server, vector-agnostic, exposing two methods:
   - `request(args_json)` — client side. Takes the caller's RLN identity
-    commitment (normally supplied by the RLN membership module, which keeps
-    the identity secret; a legacy `seed` argument instead derives one via
-    `liblogos_rln_module.generate_identity`), obtains the auth payload for
-    the selected vector (raw `authPayload` or the `authProvider` module's
-    `produce_auth`), sends the request to a gifter peer over
-    `libp2p_module`, and returns the granted allocation. The identity secret
-    never reaches this module.
+    commitment (supplied by the RLN membership module, which keeps the
+    identity secret), obtains the auth payload for the selected vector (raw
+    `authPayload` or the `authProvider` module's `produce_auth`), sends the
+    request to a gifter peer over `libp2p_module`, and returns the granted
+    allocation. The identity secret never reaches this module.
   - `serve(args_json)` — gifter side. Mounts `/logos/rln/membership/1.0.0`,
     authenticates each request through the configured vector's `verify_auth`
     module, and registers the commitment on-chain via
@@ -96,7 +94,7 @@ Reference vectors in this repo:
   `personal_sign`ing the lowercase hex of the 32-byte commitment with any
   wallet and passing it via `authPayload`). The verifier recovers the signer,
   checks `config.allowlist`, and returns the address as the nullifier — one
-  membership per address, now persisted like every other nullifier.
+  membership per address, persisted like every other nullifier.
 
 Authentication gates only the client↔gifter exchange; RLN proofs are untouched.
 

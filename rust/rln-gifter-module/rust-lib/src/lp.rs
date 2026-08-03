@@ -169,6 +169,28 @@ fn on_owner_thread() -> bool {
         .unwrap_or(false)
 }
 
+/// Open a client for `target` while still on the owner thread, so worker
+/// threads (which cannot create clients) find it ready. Errors instead of
+/// deferring: a config-named module that can't be opened must fail the
+/// configuring call, not every later request.
+pub fn ensure_client(target: &str) -> Result<(), String> {
+    let have = lock(&CLIENTS)
+        .as_ref()
+        .map(|m| m.contains_key(target))
+        .unwrap_or(false);
+    if have {
+        return Ok(());
+    }
+    if !on_owner_thread() {
+        return Err(format!("cannot open lp client for {target} off the owner thread"));
+    }
+    if create_client(target) {
+        Ok(())
+    } else {
+        Err(format!("lp_client_create failed for {target} (is the module loaded?)"))
+    }
+}
+
 fn client_ptr(target: &str) -> Option<*mut ffi::LpClient> {
     let have = lock(&CLIENTS)
         .as_ref()

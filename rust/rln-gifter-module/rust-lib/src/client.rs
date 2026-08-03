@@ -12,9 +12,8 @@ use serde_json::{json, Value};
 use crate::lp::{self, b64, b64_decode};
 use crate::wire::{RlnGifterRequest, RlnGifterResponse, RLN_GIFTER_CODEC};
 
-// generate_identity is fast; the gifter round trip (dial + on-chain register on
-// the server) can run up to ~3 minutes; adoption is a quick local set.
-const GEN_TIMEOUT_MS: i32 = 30_000;
+// The gifter round trip (dial + on-chain register on the server) can run up
+// to ~3 minutes.
 const REQUEST_TIMEOUT_MS: i64 = 190_000;
 const REQUEST_CALL_TIMEOUT_MS: i32 = 205_000;
 // Producer plugins may drive hardware (keycard capture covers
@@ -22,7 +21,7 @@ const REQUEST_CALL_TIMEOUT_MS: i32 = 205_000;
 const PRODUCE_TIMEOUT_MS: i32 = 120_000;
 
 /// Client entry point (the trait's `request`): args
-/// `{gifterPeerId, gifterMultiaddr, config?, identityCommitment?, seed?, rate?,
+/// `{gifterPeerId, gifterMultiaddr, config?, identityCommitment, rate?,
 ///  authType?, authPayload?, authProvider?, authArgs?}`.
 /// Returns `{leaf_index, id_commitment, auth_success, identity_adopted, tx_hash?, config_account?}`.
 pub fn request(args_json: &str) -> Result<Value, String> {
@@ -30,32 +29,23 @@ pub fn request(args_json: &str) -> Result<Value, String> {
     let gifter_peer_id = a.get("gifterPeerId").and_then(Value::as_str).ok_or("missing gifterPeerId")?;
     let gifter_multiaddr =
         a.get("gifterMultiaddr").and_then(Value::as_str).ok_or("missing gifterMultiaddr")?;
-    let seed = a.get("seed").and_then(Value::as_str).unwrap_or("");
     let provided_commitment =
         a.get("identityCommitment").and_then(Value::as_str).unwrap_or("");
     let rate = a.get("rate").and_then(Value::as_u64).unwrap_or(0);
 
-    // 1. Obtain the RLN identity commitment. Preferred (full spec alignment):
-    //    the caller — the RLN membership module — generated the credential
-    //    in-module and passes its commitment here, so the identity secret never
-    //    leaves that module. Legacy fallback: derive it from a seed via the
-    //    sibling's generate_identity.
-    let id_commitment_hex = if !provided_commitment.is_empty() {
-        provided_commitment.trim_start_matches("0x").to_string()
-    } else if !seed.is_empty() {
-        let idv =
-            lp::call_module_json(lp::RLN_MODULE, "generate_identity", &json!([seed]), GEN_TIMEOUT_MS)?;
-        idv.get("id_commitment")
-            .and_then(Value::as_str)
-            .ok_or("generate_identity: no id_commitment")?
-            .to_string()
-    } else {
-        return Err("request needs identityCommitment or seed".into());
-    };
+    // The commitment comes from the caller — the RLN membership module
+    // generates the credential in-module and passes only its commitment, so
+    // the identity secret never reaches this module. Lowercased so producer
+    // and verifier see the same string for the same commitment (the server
+    // side hex-encodes, which is lowercase).
+    if provided_commitment.is_empty() {
+        return Err("request needs identityCommitment".into());
+    }
+    let id_commitment_hex = provided_commitment.trim_start_matches("0x").to_lowercase();
     let id_commitment =
         hex::decode(&id_commitment_hex).map_err(|e| format!("id_commitment hex: {e}"))?;
 
-    // 2. Auth vector + payload. `authType` names the vector in the wire's
+    // Auth vector + payload. `authType` names the vector in the wire's
     //    OPEN authentication_type vocabulary — any type the target gifter is
     //    configured to verify (its authVerifiers modules); this client never
     //    gatekeeps it and knows no vector by name. The payload comes from
@@ -68,6 +58,9 @@ pub fn request(args_json: &str) -> Result<Value, String> {
     let auth_type_req = a.get("authType").and_then(Value::as_str).unwrap_or("");
     let auth_payload_hex = a.get("authPayload").and_then(Value::as_str).unwrap_or("");
     let auth_provider = a.get("authProvider").and_then(Value::as_str).unwrap_or("");
+    if !auth_payload_hex.is_empty() && !auth_provider.is_empty() {
+        return Err("authPayload and authProvider are mutually exclusive".into());
+    }
     let auth_payload: Vec<u8> = if auth_type_req.is_empty() {
         if !auth_payload_hex.is_empty() || !auth_provider.is_empty() {
             return Err("authPayload/authProvider need an explicit authType".into());
@@ -98,7 +91,7 @@ pub fn request(args_json: &str) -> Result<Value, String> {
         return Err(format!("authType '{auth_type_req}' needs authPayload or authProvider"));
     };
 
-    // 3. One request→response over the generic libp2p bridge.
+    // One request→response over the generic libp2p bridge.
     let request_id = format!("gift-{}", &id_commitment_hex[..id_commitment_hex.len().min(16)]);
     let req = RlnGifterRequest {
         request_id: request_id.clone(),
@@ -160,4 +153,57 @@ pub fn request(args_json: &str) -> Result<Value, String> {
         out["config_account"] = json!(cfg);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(extra: &str) -> Result<Value, String> {
+        request(&format!(
+            r#"{{"gifterPeerId":"12D3KooWTest","gifterMultiaddr":"/ip4/127.0.0.1/tcp/1",
+                 "identityCommitment":"{}",{extra}"rate":100}}"#,
+            "ab".repeat(32)
+        ))
+    }
+
+    #[test]
+    fn payload_and_provider_are_mutually_exclusive() {
+        let e = req(r#""authType":"voucher-v1","authPayload":"aa","authProvider":"m","#)
+            .unwrap_err();
+        assert!(e.contains("mutually exclusive"), "got: {e}");
+    }
+
+    #[test]
+    fn payload_material_needs_an_explicit_auth_type() {
+        for extra in [r#""authPayload":"aa","#, r#""authProvider":"m","#] {
+            let e = req(extra).unwrap_err();
+            assert!(e.contains("need an explicit authType"), "got: {e}");
+        }
+    }
+
+    #[test]
+    fn named_vector_needs_a_payload_source() {
+        let e = req(r#""authType":"voucher-v1","#).unwrap_err();
+        assert!(e.contains("needs authPayload or authProvider"), "got: {e}");
+    }
+
+    #[test]
+    fn bad_payload_hex_is_rejected_before_any_io() {
+        let e = req(r#""authType":"voucher-v1","authPayload":"zz","#).unwrap_err();
+        assert!(e.contains("authPayload hex"), "got: {e}");
+    }
+
+    #[test]
+    fn commitment_is_lowercased_for_the_producer_contract() {
+        // Uppercase commitment + provider: fails at the lp stub, but the arg
+        // shape is accepted — the identity path must not be the error.
+        let e = request(&format!(
+            r#"{{"gifterPeerId":"p","gifterMultiaddr":"/m",
+                 "identityCommitment":"{}","authType":"t","authProvider":"m"}}"#,
+            "AB".repeat(32)
+        ))
+        .unwrap_err();
+        assert!(!e.contains("id_commitment hex"), "got: {e}");
+    }
 }

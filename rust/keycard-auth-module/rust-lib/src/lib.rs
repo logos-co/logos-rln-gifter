@@ -86,3 +86,40 @@ impl KeycardAuthModule for KeycardAuth {
 pub extern "Rust" fn logos_module_install() {
     install::<KeycardAuth>();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(config: Option<serde_json::Value>, payload_hex: &str) -> VerifyRequest {
+        VerifyRequest {
+            auth_type: rln_auth_vector::KEYCARD_ATTEST_AUTH_TYPE.into(),
+            payload_hex: payload_hex.into(),
+            id_commitment_hex: "11".repeat(32),
+            rate: 100,
+            config,
+        }
+    }
+
+    #[test]
+    fn missing_bad_or_empty_trusted_cas_is_an_operator_error() {
+        assert!(KeycardVector.verify(&req(None, "aa")).unwrap_err().contains("required"));
+        let bad_hex = serde_json::json!({ "trusted_cas": ["zz"] });
+        assert!(KeycardVector.verify(&req(Some(bad_hex), "aa")).unwrap_err().contains("hex"));
+        let bad_len = serde_json::json!({ "trusted_cas": ["aa"] });
+        assert!(KeycardVector.verify(&req(Some(bad_len), "aa")).unwrap_err().contains("33 bytes"));
+        let empty = serde_json::json!({ "trusted_cas": [] });
+        assert!(KeycardVector.verify(&req(Some(empty), "aa")).unwrap_err().contains("empty"));
+    }
+
+    #[test]
+    fn undecodable_or_unparseable_payload_is_rejected_not_errored() {
+        let cfg = serde_json::json!({ "trusted_cas": ["02".to_owned() + &"ab".repeat(32)] });
+        let v = KeycardVector.verify(&req(Some(cfg.clone()), "zz")).unwrap();
+        assert!(!v.ok);
+        assert!(v.reason.unwrap().contains("payload hex"));
+        let v = KeycardVector.verify(&req(Some(cfg), &"00".repeat(8))).unwrap();
+        assert!(!v.ok);
+        assert!(v.reason.unwrap().contains("parse failed"));
+    }
+}

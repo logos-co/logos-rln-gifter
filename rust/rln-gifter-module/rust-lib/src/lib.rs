@@ -11,16 +11,14 @@ mod wire;
 
 pub trait RlnGifterModule: Send + 'static {
     /// Client: request a gifted membership from a gifter peer. Args
-    /// `{gifterPeerId, gifterMultiaddr, config?, identityCommitment?, seed?,
-    ///  rate?, authType?, authPayload?, authProvider?, authArgs?}` —
-    /// identityCommitment is the primary identity source (seed is a legacy
-    /// fallback deriving one via the rln module). authType names the auth
-    /// vector in the wire's OPEN authentication_type vocabulary — any type
-    /// the target gifter's authVerifiers accept; this module knows no vector
-    /// by name. The payload comes from authPayload (raw hex, verbatim) or an
-    /// authProvider module implementing the rln_auth_vector producer
-    /// contract (authArgs forwarded verbatim); no authType at all is an
-    /// unauthenticated request for an open gifter
+    /// `{gifterPeerId, gifterMultiaddr, config?, identityCommitment, rate?,
+    ///  authType?, authPayload?, authProvider?, authArgs?}`. authType names
+    /// the auth vector in the wire's OPEN authentication_type vocabulary —
+    /// any type the target gifter's authVerifiers accept; this module knows
+    /// no vector by name. The payload comes from authPayload (raw hex,
+    /// verbatim) or an authProvider module implementing the rln_auth_vector
+    /// producer contract (authArgs forwarded verbatim); no authType at all
+    /// is an unauthenticated request for an open gifter
     /// → `{leaf_index, id_commitment, auth_success, identity_adopted, tx_hash?}`.
     fn request(&mut self, args_json: String) -> String;
     /// Gifter node: mount the gifter protocol and serve inbound requests. Args

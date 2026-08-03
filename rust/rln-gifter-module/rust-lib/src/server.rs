@@ -2,9 +2,8 @@
 // generic protocol bridge, authenticate each request through the configured
 // vector's verifier module (rln_auth_vector contract — this module ships no
 // vector of its own), and register the membership on-chain via
-// liblogos_rln_module. Replaces libp2p_module.rlnGifterServe + the gifter
-// cbind. A single serialized worker drains inbound streams so the funded
-// wallet's tx nonce stays ordered.
+// liblogos_rln_module. A single serialized worker drains inbound streams so
+// the funded wallet's tx nonce stays ordered.
 // FEATURE: RLN membership gifter server
 
 use std::collections::{HashMap, HashSet};
@@ -27,8 +26,8 @@ const READ_TIMEOUT_MS: i32 = 60_000;
 const WRITE_TIMEOUT_MS: i32 = 30_000;
 const REGISTER_TIMEOUT_MS: i32 = 190_000;
 const MOUNT_TIMEOUT_MS: i32 = 30_000;
-// Plugin verifier calls may do their own IO (chain reads, HTTP), unlike the
-// in-process built-in verifies.
+// Verifier modules may do their own IO (chain reads, HTTP), so the budget
+// is generous.
 const AUTH_VERIFY_TIMEOUT_MS: i32 = 30_000;
 const DEFAULT_MAX_RATE: u64 = 100;
 const MAX_RPC_SIZE: u64 = 4096;
@@ -41,11 +40,10 @@ struct ServerCfg {
     /// config). Every vector — the reference keycard/eth modules included —
     /// is a plugin implementing the rln_auth_vector verifier contract; this
     /// module ships none of its own, so a new allocation-auth strategy needs
-    /// zero changes here.
+    /// zero changes here. Empty map = open gifter (auth skipped entirely).
     auth_verifiers: HashMap<String, (String, Option<Value>)>,
     nullifiers_path: String,
     max_rate_limit: u64,
-    auth_enabled: bool,
 }
 
 static SERVER: Mutex<Option<ServerCfg>> = Mutex::new(None);
@@ -79,30 +77,42 @@ pub fn serve(args_json: &str) -> Result<Value, String> {
     let nullifiers_path =
         a.get("consumedNullifiersPath").and_then(Value::as_str).unwrap_or("").to_string();
 
+    // A present-but-malformed authVerifiers must fail serve, never silently
+    // degrade to an open gifter.
     let mut auth_verifiers: HashMap<String, (String, Option<Value>)> = HashMap::new();
-    if let Some(map) = a.get("authVerifiers").and_then(Value::as_object) {
-        for (atype, v) in map {
-            let module = v.get("module").and_then(Value::as_str).unwrap_or("");
-            if module.is_empty() {
-                return Err(format!("authVerifiers['{atype}'] needs a module"));
+    match a.get("authVerifiers") {
+        None | Some(Value::Null) => {}
+        Some(Value::Object(map)) => {
+            for (atype, v) in map {
+                let module = v.get("module").and_then(Value::as_str).unwrap_or("");
+                if module.is_empty() {
+                    return Err(format!("authVerifiers['{atype}'] needs a module"));
+                }
+                // Open the verifier's lp client HERE, on the owner thread —
+                // the serve worker cannot create clients, only use them.
+                lp::ensure_client(module).map_err(|e| format!("authVerifiers['{atype}']: {e}"))?;
+                auth_verifiers
+                    .insert(atype.clone(), (module.to_string(), v.get("config").cloned()));
             }
-            auth_verifiers.insert(atype.clone(), (module.to_string(), v.get("config").cloned()));
         }
+        Some(_) => return Err("authVerifiers must be an object of {type: {module, config?}}".into()),
     }
-    let auth_enabled = !auth_verifiers.is_empty();
 
-    *lock(&CONSUMED_NULLIFIERS) = Some(auth::load_nullifiers(&nullifiers_path));
+    // Merge, never replace: a re-serve (config refresh) may only ADD replay
+    // knowledge, or in-memory reservations would be forgotten.
+    lock(&CONSUMED_NULLIFIERS)
+        .get_or_insert_with(HashSet::new)
+        .extend(auth::load_nullifiers(&nullifiers_path));
     *lock(&SERVER) = Some(ServerCfg {
         config,
         wallet,
         auth_verifiers,
         nullifiers_path,
         max_rate_limit,
-        auth_enabled,
     });
 
     // Mount + spawn the serialized worker exactly once; re-calling serve just
-    // refreshes the config above (e.g. a new wallet or allowlist).
+    // refreshes the config above (e.g. a new wallet or verifier set).
     if !SERVING.swap(true, Ordering::SeqCst) {
         if let Err(e) = lp::call_libp2p("mountProtocol", &json!([RLN_GIFTER_CODEC]), MOUNT_TIMEOUT_MS) {
             SERVING.store(false, Ordering::SeqCst);
@@ -175,8 +185,8 @@ fn failure_response(request_id: &str, auth_success: bool, message: &str) -> RlnG
     }
 }
 
-// Ports protocol.nim handleRequest: authenticate through the configured
-// vector's verifier module, register on-chain, and roll back the nullifier
+// Handle one decoded request: authenticate through the configured vector's
+// verifier module, register on-chain, and roll back the nullifier
 // reservation if registration fails.
 fn handle_request(buf: &[u8]) -> RlnGifterResponse {
     let req: RlnGifterRequest = match RlnGifterRequest::decode(buf) {
@@ -195,7 +205,15 @@ fn handle_request(buf: &[u8]) -> RlnGifterResponse {
     let auth_type = String::from_utf8_lossy(&req.authentication_type).to_string();
     let mut authorized_nullifier: Option<String> = None;
 
-    if cfg.auth_enabled {
+    // The effective rate is settled BEFORE verification so the verifier
+    // judges the number that will actually be registered. The operator cap
+    // applies to every request, whatever the vector's replay choices.
+    let mut rate = req.rate_limit.unwrap_or(DEFAULT_MAX_RATE);
+    if rate > cfg.max_rate_limit {
+        rate = cfg.max_rate_limit;
+    }
+
+    if !cfg.auth_verifiers.is_empty() {
         // Delegate the decision to the vector's verifier module (an
         // rln_auth_vector VERIFY_METHOD implementor). The operator's opaque
         // per-vector config rides along on every call, so verifiers stay
@@ -212,7 +230,7 @@ fn handle_request(buf: &[u8]) -> RlnGifterResponse {
             auth_type: auth_type.clone(),
             payload_hex: hex::encode(&req.authentication_payload),
             id_commitment_hex: hex::encode(&req.identity_commitment),
-            rate: req.rate_limit.unwrap_or(0),
+            rate,
             config: verifier_config.clone(),
         };
         let verify_json = match serde_json::to_string(&verify_req) {
@@ -251,8 +269,20 @@ fn handle_request(buf: &[u8]) -> RlnGifterResponse {
         // A verdict nullifier opts in to the shared replay protection:
         // reserve BEFORE the register await so a concurrent request spending
         // the same credential can't also pass; rolled back on register
-        // failure, persisted on success.
+        // failure, persisted on success. Normalized once at this trust
+        // boundary (the load path lowercases too, so restart survives any
+        // plugin's casing) and namespaced by vector, so no vector can spend
+        // or squat another vector's credentials in the shared store.
         if let Some(nul) = verdict.nullifier {
+            let nul = nul.trim().to_lowercase();
+            if nul.is_empty() || nul.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                return failure_response(
+                    &req.request_id,
+                    false,
+                    &format!("auth verifier {module}: malformed nullifier"),
+                );
+            }
+            let nul = format!("{auth_type}:{nul}");
             let mut g = lock(&CONSUMED_NULLIFIERS);
             let set = g.get_or_insert_with(HashSet::new);
             if set.contains(&nul) {
@@ -265,11 +295,6 @@ fn handle_request(buf: &[u8]) -> RlnGifterResponse {
             set.insert(nul.clone());
             authorized_nullifier = Some(nul);
         }
-    }
-
-    let mut rate = req.rate_limit.unwrap_or(100);
-    if authorized_nullifier.is_some() && rate > cfg.max_rate_limit {
-        rate = cfg.max_rate_limit;
     }
 
     match register(&cfg, &req.identity_commitment, rate) {
@@ -335,4 +360,29 @@ fn register(cfg: &ServerCfg, id_commitment: &[u8], rate: u64) -> Result<Membersh
         transaction_hash: tx_hash_bytes,
         config_account_id: Some(cfg.config.clone()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Under the test FFI stub no lp client can open, which is exactly the
+    // shape of a misconfigured verifier: serve must surface it, not defer it
+    // to a per-request auth failure.
+    #[test]
+    fn serve_fails_loudly_when_a_verifier_client_cannot_open() {
+        let e = serve(
+            r#"{"config":"c","wallet":"w","authVerifiers":{"t":{"module":"nope_module"}}}"#,
+        )
+        .unwrap_err();
+        assert!(e.contains("authVerifiers['t']"), "got: {e}");
+    }
+
+    #[test]
+    fn serve_rejects_malformed_auth_verifiers_instead_of_degrading_open() {
+        let e = serve(r#"{"config":"c","wallet":"w","authVerifiers":"oops"}"#).unwrap_err();
+        assert!(e.contains("must be an object"), "got: {e}");
+        let e = serve(r#"{"config":"c","wallet":"w","authVerifiers":{"t":{}}}"#).unwrap_err();
+        assert!(e.contains("needs a module"), "got: {e}");
+    }
 }
