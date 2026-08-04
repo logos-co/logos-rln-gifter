@@ -11,12 +11,24 @@ mod wire;
 
 pub trait RlnGifterModule: Send + 'static {
     /// Client: request a gifted membership from a gifter peer. Args
-    /// `{gifterPeerId, gifterMultiaddr, config?, seed, rate?, authKey?, attestation?}`
+    /// `{gifterPeerId, gifterMultiaddr, config?, identityCommitment, rate?,
+    ///  authType?, authPayload?, authProvider?, authArgs?}`. authType names
+    /// the auth vector in the wire's OPEN authentication_type vocabulary —
+    /// any type the target gifter's authVerifiers accept; this module knows
+    /// no vector by name. The payload comes from authPayload (raw hex,
+    /// verbatim) or an authProvider module implementing the rln_auth_vector
+    /// producer contract (authArgs forwarded verbatim); no authType at all
+    /// is an unauthenticated request for an open gifter
     /// → `{leaf_index, id_commitment, auth_success, identity_adopted, tx_hash?}`.
     fn request(&mut self, args_json: String) -> String;
     /// Gifter node: mount the gifter protocol and serve inbound requests. Args
-    /// `{config, wallet, allowlist?, trustedCAs?, consumedNullifiersPath?, maxRateLimit?}`
-    /// → `{mounted:true}`.
+    /// `{config, wallet, authVerifiers?, consumedNullifiersPath?,
+    ///  maxRateLimit?}` → `{mounted:true}`.
+    /// authVerifiers maps each accepted authentication_type to its verifier
+    /// module (`{"<type>": {module, config?}}` — an rln_auth_vector
+    /// VERIFY_METHOD implementor; config rides along opaquely on every
+    /// call). ALL vectors are such plugins — this module ships none. No
+    /// authVerifiers = an open gifter.
     fn serve(&mut self, args_json: String) -> String;
     /// Relay an arbitrary libp2p_module call so the UI can read its return value
     /// (a C++ LogosResult marshals to null through the QML bridge; a module-to-

@@ -12,27 +12,28 @@ delegated to `liblogos_rln_module`; RLN proof generation and verification
 ## Modules
 
 - **`rln_gifter_module`** (`rust/rln-gifter-module`) — the gifter protocol,
-  client and server, exposing two methods:
-  - `request(args_json)` — client side. Generates an RLN identity locally (via
-    `liblogos_rln_module.generate_identity`), builds the request, sends it to a
-    gifter peer over `libp2p_module`, and returns the granted allocation. The
-    identity secret stays on the client.
+  client and server, vector-agnostic, exposing two methods:
+  - `request(args_json)` — client side. Takes the caller's RLN identity
+    commitment (supplied by the RLN membership module, which keeps the
+    identity secret), obtains the auth payload for the selected vector (raw
+    `authPayload` or the `authProvider` module's `produce_auth`), sends the
+    request to a gifter peer over `libp2p_module`, and returns the granted
+    allocation. The identity secret never reaches this module.
   - `serve(args_json)` — gifter side. Mounts `/logos/rln/membership/1.0.0`,
-    authenticates each request, and registers the commitment on-chain via
+    authenticates each request through the configured vector's `verify_auth`
+    module, and registers the commitment on-chain via
     `liblogos_rln_module.register_member` on a single serialized worker.
-- **`keycard_capture_module`** (`rust/keycard-capture-module`) — client-side
-  PC/SC [Keycard](https://keycard.tech) capture, a separate module so a headless
-  gifter needs no `pcsclite`. Methods:
-  - `capture_attestation(id_commitment_hex)` — connect / select /
-    `IDENTIFY_CARD`, then `{attestation_tlv, nullifier, verified}`.
-  - `card_status()` — reader and card presence.
-- **`crates/keycard-attest`** (attestation verify) and **`crates/keycard-client`**
-  (PC/SC transport) — the shared keycard crates, a Cargo workspace both modules
-  consume as a git dependency (tag `keycard-crates-v0.1.0`). `rln_gifter_module`
-  uses only `keycard-attest`, so it carries no PC/SC dependency.
+- **Auth vector modules** — see [Authentication](#authentication):
+  `keycard-capture-module` (producer, PC/SC — separate so a headless gifter
+  needs no `pcsclite`; also `card_status()` for UIs), `keycard-auth-module`
+  (verifier), `eth-auth-module` (verifier).
+- **Crates** — `crates/rln-auth-vector` (the vector contract kit every
+  module above and any third-party vector imports), `crates/keycard-attest`
+  (attestation verify) and `crates/keycard-client` (PC/SC transport), all
+  consumed as git dependencies (`keycard-crates-v0.1.0` tag / pinned rev).
 
-Both modules drive `libp2p_module` through its generic custom-protocol bridge
-(`protocolRequest`, `protocolAcceptStream`, `streamReadLpJson`,
+The gifter modules drive `libp2p_module` through its generic custom-protocol
+bridge (`protocolRequest`, `protocolAcceptStream`, `streamReadLpJson`,
 `streamWriteLpJson`, `streamReleaseJson`); no gifter-specific code lives in
 `libp2p_module`.
 
@@ -45,7 +46,7 @@ client                                     gifter (funded wallet)
   |  RlnGifterRequest {                      |
   |    identityCommitment,                   |-- 1. authenticate (below)
   |    auth payload:  ---------------------> |
-  |    EIP-191 sig or keycard attestation    |-- 2. register_member on
+  |    per the selected auth vector          |-- 2. register_member on
   |  }                                       |      liblogos_rln_module, which
   |                                          |      funds and signs the tx
   |  RlnGifterResponse {                     |
@@ -59,20 +60,41 @@ The request and response are length-prefixed protobuf on the
 
 ## Authentication
 
-A gifter accepts either scheme, or both, per its `serve` configuration:
+The wire carries an opaque `(authentication_type, authentication_payload)`
+pair, and **every auth vector is a plugin** — `rln_gifter_module` ships no
+verification code of its own. The `crates/rln-auth-vector` kit defines the
+contract both sides speak (see its README): a vector is a logos module
+implementing `produce_auth` (client side — make the payload) and/or
+`verify_auth` (gifter side — decide the request), and it plugs in with
+configuration only:
 
-- **Eth allowlist (EIP-191).** The client `personal_sign`s the lowercase hex of
-  the 32-byte identity commitment. The gifter recovers the 20-byte address and
-  checks it against a lowercase `0x`-hex allowlist. Each address gets one
-  membership; a consumed set rejects repeats.
-- **Keycard attestation.** The client sends the raw `IDENTIFY_CARD` TLV, signed
-  over the commitment-bound challenge
-  `SHA256("logos/rln/keycard-attest/1" || id_commitment)`. The gifter recovers
-  the vendor CA from the card certificate, checks it against a trusted-CA set,
-  verifies the challenge signature, and derives the once-per-card nullifier
-  `keccak256(ident_pub)` — stable across factory resets, so each card claims
-  exactly one membership. The consumed-nullifier set is optionally persisted to
-  an append-only file across restarts.
+- **Gifter node**: `serve`'s `authVerifiers` maps each accepted type to its
+  verifier — `{"<type>": {"module": …, "config"?: {…}}}`. The opaque
+  `config` rides along on every verify call, so verifiers stay stateless. A
+  verdict `nullifier` opts the spent credential into shared replay
+  protection: reserved before the on-chain register, rolled back on its
+  failure, persisted to the append-only consumed-nullifier file on success.
+  No `authVerifiers` = an open gifter.
+- **Requester**: `request` takes `authType` plus either a raw `authPayload`
+  (hex the application produced itself) or an `authProvider` producer module.
+  No `authType` = an unauthenticated request.
+
+Reference vectors in this repo:
+
+- **Keycard attestation** (`keycard-auth-module` verifies,
+  `keycard-capture-module` produces — split so a headless gifter never links
+  PC/SC). The producer captures the raw `IDENTIFY_CARD` TLV, signed over the
+  commitment-bound challenge
+  `SHA256("logos/rln/keycard-attest/1" || id_commitment)`. The verifier
+  recovers the vendor CA from the card certificate, checks it against
+  `config.trusted_cas`, verifies the challenge signature, and returns the
+  once-per-card nullifier `keccak256(ident_pub)` — stable across factory
+  resets, so each card claims exactly one membership.
+- **Eth allowlist / EIP-191** (`eth-auth-module` verifies; producing means
+  `personal_sign`ing the lowercase hex of the 32-byte commitment with any
+  wallet and passing it via `authPayload`). The verifier recovers the signer,
+  checks `config.allowlist`, and returns the address as the nullifier — one
+  membership per address, persisted like every other nullifier.
 
 Authentication gates only the client↔gifter exchange; RLN proofs are untouched.
 
@@ -88,8 +110,11 @@ client verbatim.
 
 | Path | What |
 |---|---|
-| `rust/rln-gifter-module/` | gifter module — `request` (client) + `serve` (server), wire codec, cross-module `lp_*` client |
-| `rust/keycard-capture-module/` | client-side PC/SC keycard capture module |
+| `rust/rln-gifter-module/` | gifter module — `request` (client) + `serve` (server), wire codec, nullifier store, cross-module `lp_*` client; vector-agnostic |
+| `rust/keycard-capture-module/` | keycard vector, producer half: client-side PC/SC capture (`produce_auth`) + `card_status` |
+| `rust/keycard-auth-module/` | keycard vector, verifier half: attestation verify (`verify_auth`), no PC/SC |
+| `rust/eth-auth-module/` | eth-allowlist vector, verifier half: EIP-191 recover + allowlist (`verify_auth`) |
+| `crates/rln-auth-vector/` | the auth-vector contract kit: request/reply types, `AuthVector` trait, dispatch glue |
 | `crates/keycard-attest/` | attestation verify: TLV parse, CA recovery, challenge binding, nullifier |
 | `crates/keycard-client/` | PC/SC keycard transport: secure channel + `IDENTIFY_CARD` |
 | `tools/mint_attest.py` | mint synthetic keycard attestations for CI / e2e (not for production) |

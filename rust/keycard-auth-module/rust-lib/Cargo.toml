@@ -1,6 +1,6 @@
 [package]
-name = "rln_gifter_module"
-version = "0.2.0"
+name = "keycard_auth_module"
+version = "0.1.0"
 edition = "2021"
 
 [workspace]
@@ -9,15 +9,11 @@ edition = "2021"
 crate-type = ["staticlib"]
 
 [profile.release]
-# Abort (not unwind) across the FFI boundary — a Rust panic must never unwind
-# into the C++ host.
 panic = "abort"
 
 [dependencies]
 serde_json = "1"
 hex = "0.4"
-base64 = "0.22"
-# No auth crypto here: vector verification/production lives in plugin modules
-# speaking the rln_auth_vector contract.
+keycard_attest = { git = "https://github.com/logos-co/logos-rln-gifter", tag = "keycard-crates-v0.1.0", package = "keycard_attest" }
 rln_auth_vector = { git = "https://github.com/logos-co/logos-rln-gifter", rev = "79b90eef9423ce6a9000182a2d343be7eacd8d6b", package = "rln_auth_vector" }
 logos-rust-sdk = { path = "../logos-rust-sdk-src" }

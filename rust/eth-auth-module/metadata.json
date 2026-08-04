@@ -1,0 +1,23 @@
+{
+  "name": "eth_auth_module",
+  "version": "0.1.0",
+  "description": "EIP-191 eth-allowlist verifier for gifted RLN registration (rln_auth_vector verify_auth)",
+  "author": "Logos",
+  "type": "core",
+  "interface": "cdylib",
+  "category": "blockchain",
+  "main": "eth_auth_module_plugin",
+  "dependencies": [],
+  "include": [],
+  "capabilities": [],
+
+  "codegen": {
+    "rust": { "crate": "rust-lib", "trait": "EthAuthModule" }
+  },
+
+  "nix": {
+    "external_libraries": [],
+    "packages": { "build": [], "runtime": [] },
+    "cmake": { "find_packages": [], "extra_include_dirs": [] }
+  }
+}

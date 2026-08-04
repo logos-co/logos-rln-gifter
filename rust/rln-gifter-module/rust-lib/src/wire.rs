@@ -3,8 +3,8 @@
 // bytes/strings, varint for uint64/bool). No external protobuf dependency.
 // FEATURE: RLN membership gifter wire codec (byte-identical to the nwaku port)
 
-pub const ETH_ALLOWLIST_AUTH_TYPE: &str = "eth-allowlist";
-pub const KEYCARD_ATTEST_AUTH_TYPE: &str = "keycard-attestation";
+// The wire carries authentication_type as opaque bytes — vector names live in
+// the rln_auth_vector crate and in gifter configuration, not here.
 pub const RLN_GIFTER_CODEC: &str = "/logos/rln/membership/1.0.0";
 
 #[derive(Default, Clone)]
@@ -290,14 +290,14 @@ mod tests {
     fn request_roundtrip() {
         let req = RlnGifterRequest {
             request_id: "abc123".into(),
-            authentication_type: KEYCARD_ATTEST_AUTH_TYPE.as_bytes().to_vec(),
+            authentication_type: b"any-vector-string".to_vec(),
             authentication_payload: vec![1, 2, 3, 4],
             identity_commitment: vec![9u8; 32],
             rate_limit: Some(100),
         };
         let dec = RlnGifterRequest::decode(&req.encode()).unwrap();
         assert_eq!(dec.request_id, "abc123");
-        assert_eq!(dec.authentication_type, KEYCARD_ATTEST_AUTH_TYPE.as_bytes());
+        assert_eq!(dec.authentication_type, b"any-vector-string");
         assert_eq!(dec.authentication_payload, vec![1, 2, 3, 4]);
         assert_eq!(dec.identity_commitment, vec![9u8; 32]);
         assert_eq!(dec.rate_limit, Some(100));

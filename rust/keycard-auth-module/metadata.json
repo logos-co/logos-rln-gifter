@@ -1,0 +1,23 @@
+{
+  "name": "keycard_auth_module",
+  "version": "0.1.0",
+  "description": "Keycard attestation verifier for gifted RLN registration (rln_auth_vector verify_auth; no PC/SC — safe on headless gifter nodes)",
+  "author": "Logos",
+  "type": "core",
+  "interface": "cdylib",
+  "category": "blockchain",
+  "main": "keycard_auth_module_plugin",
+  "dependencies": [],
+  "include": [],
+  "capabilities": [],
+
+  "codegen": {
+    "rust": { "crate": "rust-lib", "trait": "KeycardAuthModule" }
+  },
+
+  "nix": {
+    "external_libraries": [],
+    "packages": { "build": [], "runtime": [] },
+    "cmake": { "find_packages": [], "extra_include_dirs": [] }
+  }
+}
