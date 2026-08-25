@@ -22,7 +22,11 @@ use serde_json::Value;
 // and only fails if that target is actually called. Auth vector modules are
 // named by CONFIGURATION (authProvider / authVerifiers), never by constants
 // here — this module knows no vector by name.
-pub const RLN_MODULE: &str = "liblogos_rln_module";
+// The registry-provider module register_member lives on. Pre-2026-08-10
+// this module was NAMED liblogos_rln_module (the rename swapped the
+// meaning: that name is now the membership module, which has no
+// register_member); the gifter registers through the lez-rln registry.
+pub const RLN_MODULE: &str = "liblogos_lez_rln_module";
 pub const LIBP2P_MODULE: &str = "libp2p_module";
 
 /// Standard base64 (padded) — the encoding libp2p_module's stream JSON wrappers
