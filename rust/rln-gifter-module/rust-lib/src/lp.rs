@@ -4,7 +4,7 @@
 // bind the consumer C ABI directly, exactly as the sibling rln/membership
 // modules do. Reply envelope matches the SDK's call_json: parse(result_json),
 // which is a value object for universal C++ modules (libp2p_module) and a
-// JSON-encoded string for cdylib modules (liblogos_rln_module).
+// JSON-encoded string for cdylib modules (liblogos_lez_rln_module).
 // FEATURE: RLN membership gifter cross-module transport
 
 use std::collections::HashMap;

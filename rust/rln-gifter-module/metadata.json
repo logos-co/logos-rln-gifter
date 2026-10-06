@@ -1,6 +1,6 @@
 {
   "name": "rln_gifter_module",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "RLN membership gifter over libp2p: vector-agnostic client requests + gifter serve (auth via pluggable rln_auth_vector modules)",
   "author": "Logos",
   "type": "core",

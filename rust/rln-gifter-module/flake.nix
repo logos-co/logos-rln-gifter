@@ -2,7 +2,7 @@
   description = "Logos module for RLN membership gifter: client requests + gifter serve over libp2p";
 
   inputs = {
-    logos-module-builder.url = "github:logos-co/logos-module-builder/6ef42ea8661121831ece79e6b702e27ac1cf46e7";
+    logos-module-builder.url = "github:logos-co/logos-module-builder/0.3.1";
   };
 
   outputs = inputs@{ logos-module-builder, ... }:
