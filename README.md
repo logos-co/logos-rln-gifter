@@ -6,7 +6,7 @@ authenticated clients, so a client never holds funds or signs its own
 registration — and its RLN identity secret never leaves its machine.
 
 The protocol covers transport and authentication only. On-chain registration is
-delegated to `liblogos_rln_module`; RLN proof generation and verification
+delegated to `liblogos_lez_rln_module`; RLN proof generation and verification
 (LIP-144) live elsewhere.
 
 ## Modules
@@ -22,7 +22,8 @@ delegated to `liblogos_rln_module`; RLN proof generation and verification
   - `serve(args_json)` — gifter side. Mounts `/logos/rln/membership/1.0.0`,
     authenticates each request through the configured vector's `verify_auth`
     module, and registers the commitment on-chain via
-    `liblogos_rln_module.register_member` on a single serialized worker.
+    `liblogos_lez_rln_module.register_member` on a single serialized worker,
+    and answers once the registry shows the membership.
 - **Auth vector modules** — see [Authentication](#authentication):
   `keycard-capture-module` (producer, PC/SC — separate so a headless gifter
   needs no `pcsclite`; also `card_status()` for UIs), `keycard-auth-module`
@@ -47,8 +48,8 @@ client                                     gifter (funded wallet)
   |    identityCommitment,                   |-- 1. authenticate (below)
   |    auth payload:  ---------------------> |
   |    per the selected auth vector          |-- 2. register_member on
-  |  }                                       |      liblogos_rln_module, which
-  |                                          |      funds and signs the tx
+  |  }                                       |      liblogos_lez_rln_module,
+  |                                          |      which funds and signs the tx
   |  RlnGifterResponse {                     |
   |    leafIndex, merkleRoot,      <-------- |
   |    blockNumber, transactionHash }        |
@@ -101,10 +102,15 @@ Authentication gates only the client↔gifter exchange; RLN proofs are untouched
 ## Registration
 
 The protocol never touches a chain itself. The gifter hands
-`(identityCommitment, rateLimit)` to `liblogos_rln_module.register_member`,
-which funds and signs the transaction, and relays the allocation (`leafIndex`,
-`merkleRoot`, `blockNumber`, `transactionHash`) — or an error — back to the
-client verbatim.
+`(identityCommitment, rateLimit)` to `liblogos_lez_rln_module.register_member`,
+which funds the transaction from the account `serve` names as `wallet` and
+signs it. That call answers when the transaction is accepted, and on LEZ
+v0.3.0 the tree assigns the leaf, so the gifter then reads the membership back
+(`get_membership`) and replies with the leaf the chain holds
+(`leafIndex`, `transactionHash` of the submitted transaction). A registration
+not on chain within 150 s is answered as a failure that says it may still
+land; an authenticated credential stays spent in that case, and is released
+only when nothing was submitted.
 
 ## Layout
 
@@ -135,7 +141,9 @@ and can be checked on their own with `cargo test` from the repo root.
 ## Runtime requirements
 
 - `rln_gifter_module` loads alongside `libp2p_module` (transport) and
-  `liblogos_rln_module` (identity generation and on-chain registration). A gifter
-  needs a funded wallet; a client needs neither funds nor a wallet.
+  `liblogos_lez_rln_module` (on-chain registration). A gifter needs a funded
+  payer; a client needs neither funds nor a wallet. A client's RLN identity
+  comes from `liblogos_rln_module`, which calls the gifter for delegated
+  registration.
 - `keycard_capture_module` needs a PC/SC stack (`pcsclite`) and a card reader on
   the client.

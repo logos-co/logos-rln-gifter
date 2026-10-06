@@ -2,8 +2,8 @@
 // generic protocol bridge, authenticate each request through the configured
 // vector's verifier module (rln_auth_vector contract — this module ships no
 // vector of its own), and register the membership on-chain via
-// liblogos_rln_module. A single serialized worker drains inbound streams so
-// the funded wallet's tx nonce stays ordered.
+// liblogos_lez_rln_module. A single serialized worker drains inbound streams so
+// the funded payer's tx nonce stays ordered.
 // FEATURE: RLN membership gifter server
 
 use std::collections::{HashMap, HashSet};
@@ -25,6 +25,13 @@ const ACCEPT_TIMEOUT_MS: i32 = 3_600_000;
 const READ_TIMEOUT_MS: i32 = 60_000;
 const WRITE_TIMEOUT_MS: i32 = 30_000;
 const REGISTER_TIMEOUT_MS: i32 = 190_000;
+/// How long a submitted registration may take to show up on chain before the
+/// request is answered as unconfirmed, and how often the registry is read
+/// meanwhile. The client allows REQUEST_TIMEOUT_MS (190 s) for the whole
+/// exchange; one registration fits per block.
+const CONFIRM_BUDGET: std::time::Duration = std::time::Duration::from_secs(150);
+const CONFIRM_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+const GET_MEMBERSHIP_TIMEOUT_MS: i32 = 30_000;
 const MOUNT_TIMEOUT_MS: i32 = 30_000;
 // Verifier modules may do their own IO (chain reads, HTTP), so the budget
 // is generous.
@@ -312,8 +319,16 @@ fn handle_request(buf: &[u8]) -> RlnGifterResponse {
         }
         Err(e) => {
             if let Some(nul) = &authorized_nullifier {
-                if let Some(set) = lock(&CONSUMED_NULLIFIERS).as_mut() {
-                    set.remove(nul);
+                match e {
+                    // Nothing reached the chain: the credential is unspent.
+                    RegisterError::NotSubmitted(_) => {
+                        if let Some(set) = lock(&CONSUMED_NULLIFIERS).as_mut() {
+                            set.remove(nul);
+                        }
+                    }
+                    // The registration may still land: keep the credential
+                    // spent so it cannot buy a second membership.
+                    RegisterError::Unconfirmed(_) => auth::append_nullifier(&cfg.nullifiers_path, nul),
                 }
             }
             RlnGifterResponse {
@@ -321,29 +336,55 @@ fn handle_request(buf: &[u8]) -> RlnGifterResponse {
                 auth_success: true,
                 error: None,
                 success: None,
-                failure: Some(MembershipAllocationFailure { error_message: e }),
+                failure: Some(MembershipAllocationFailure { error_message: e.message() }),
             }
         }
     }
 }
 
-// Delegate the on-chain registration to liblogos_rln_module (the funded wallet
-// stays there). Runs on the serialized worker thread → lp_invoke_async.
-fn register(cfg: &ServerCfg, id_commitment: &[u8], rate: u64) -> Result<MembershipAllocationSuccess, String> {
+/// Why a gift was not delivered: before anything was submitted, or after a
+/// submission the registry did not confirm in time.
+enum RegisterError {
+    NotSubmitted(String),
+    Unconfirmed(String),
+}
+
+impl RegisterError {
+    fn message(self) -> String {
+        match self {
+            RegisterError::NotSubmitted(m) | RegisterError::Unconfirmed(m) => m,
+        }
+    }
+}
+
+/// The leaf of a confirmed membership, from a `get_membership` reply:
+/// `{"registered":true,"leaf_index":N,...}`; None while it is not registered.
+fn confirmed_leaf(reply: &Value) -> Option<u64> {
+    if reply.get("registered").and_then(Value::as_bool) != Some(true) {
+        return None;
+    }
+    reply.get("leaf_index").and_then(Value::as_u64)
+}
+
+// Delegate the on-chain registration to liblogos_lez_rln_module, paid by the
+// account `serve` was given as `wallet`, then wait until the registry shows
+// the membership. register_member answers when the transaction is accepted:
+// its leaf_index is only a pre-submit estimate (the tree assigns the leaf), and
+// a registration whose claims went stale is re-sent by that module under a new
+// transaction. So the leaf reported to the client is read back from the chain.
+// Runs on the serialized worker thread -> lp_invoke_async.
+fn register(cfg: &ServerCfg, id_commitment: &[u8], rate: u64) -> Result<MembershipAllocationSuccess, RegisterError> {
     let idc_hex = hex::encode(id_commitment);
     let reply = lp::call_module_json(
         lp::RLN_MODULE,
         "register_member",
         &json!([cfg.config, cfg.wallet, idc_hex, rate]),
         REGISTER_TIMEOUT_MS,
-    )?;
-    let leaf_index = reply
-        .get("leaf_index")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("register_member: no leaf_index in {reply}"))?;
+    )
+    .map_err(RegisterError::NotSubmitted)?;
 
-    // tx_result is a JSON STRING nesting {tx_hash,...}; surface the hash so the
-    // client can show it. Absent for an already-registered PDA.
+    // tx_result is a JSON STRING nesting {tx_hash,...}: the submitted
+    // transaction. Absent for an already-registered PDA.
     let mut tx_hash_bytes = Vec::new();
     if let Some(tx_result) = reply.get("tx_result").and_then(Value::as_str) {
         if let Ok(inner) = serde_json::from_str::<Value>(tx_result) {
@@ -353,18 +394,46 @@ fn register(cfg: &ServerCfg, id_commitment: &[u8], rate: u64) -> Result<Membersh
         }
     }
 
-    Ok(MembershipAllocationSuccess {
-        leaf_index,
-        merkle_root: Vec::new(),
-        block_number: 0,
-        transaction_hash: tx_hash_bytes,
-        config_account_id: Some(cfg.config.clone()),
-    })
+    let deadline = std::time::Instant::now() + CONFIRM_BUDGET;
+    loop {
+        if let Ok(m) = lp::call_module_json(
+            lp::RLN_MODULE,
+            "get_membership",
+            &json!([cfg.config, idc_hex]),
+            GET_MEMBERSHIP_TIMEOUT_MS,
+        ) {
+            if let Some(leaf_index) = confirmed_leaf(&m) {
+                return Ok(MembershipAllocationSuccess {
+                    leaf_index,
+                    merkle_root: Vec::new(),
+                    block_number: 0,
+                    transaction_hash: tx_hash_bytes,
+                    config_account_id: Some(cfg.config.clone()),
+                });
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(RegisterError::Unconfirmed(format!(
+                "registration submitted (tx {}) but not on chain within {}s; it may still land",
+                hex::encode(&tx_hash_bytes),
+                CONFIRM_BUDGET.as_secs()
+            )));
+        }
+        std::thread::sleep(CONFIRM_POLL);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_registered_membership_has_a_confirmed_leaf() {
+        assert_eq!(confirmed_leaf(&json!({"registered": true, "leaf_index": 7, "state": "active"})), Some(7));
+        assert_eq!(confirmed_leaf(&json!({"registered": false})), None);
+        assert_eq!(confirmed_leaf(&json!({"registered": true})), None);
+        assert_eq!(confirmed_leaf(&json!("")), None);
+    }
 
     // Under the test FFI stub no lp client can open, which is exactly the
     // shape of a misconfigured verifier: serve must surface it, not defer it
