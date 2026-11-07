@@ -25,6 +25,19 @@ missing. Everything else is a description of today's behaviour with
 | `logos-lez-rln` | `379226e` | chain programs and layouts |
 | `logos-lips` | `6ebd9c86` | LIP-158, membership-management spec |
 
+Since 2026-11-05 (gifter 0.4.0, rln_auth_module 0.2.0, rln_sign_module
+0.2.0, shared crates auth-crates-v0.3.0, liblogos_rln_module 0.14.3,
+libp2p_module 1.1.0): a gifter serves several registries and the request
+names one (§1.2, §3.1); spent credentials are keyed per registry; the
+verifier sees the requester's transport peer id, which the `peer` scheme
+(`peer-any`, `peer-allowlist`) judges (§4.3). Sections below that cite
+`server.rs:<line>` predate that change.
+
+Since 2026-11-06 (gifter 0.5.0, liblogos_rln_module 0.15.0,
+logos-delivery-module 0.3.6): the allocator advertises what it serves
+through libp2p service discovery and a client finds it without a configured
+peer id; the configured pair is the fallback (§2.5).
+
 Not covered here: how to write a vector module (read
 `crates/rln-auth-vector/README.md`), RLN proof generation, chain internals.
 Paths below are relative to the checkout named in each section; this repo's
@@ -46,9 +59,14 @@ There is no gifter executable, config file or CLI. An allocator is an ordinary
 | `rln_gifter_module` | the protocol: `serve` (server half) and `request` (client half) in one module | — |
 | zero or more verifier modules | the pluggable validator (§4) | before `serve`: `serve` opens a client to each named verifier on the owner thread (`server.rs:97-100`) |
 
-The gifter module declares none of these as `metadata.json` dependencies on
-purpose; cross-module clients are created lazily so a deployment missing, say,
-a producer module still loads (`lp.rs:19-24`).
+Since 2026-11-05 the gifter module declares `libp2p_module` as a
+`metadata.json` dependency (logoscore loads it first; a node without the
+libp2p bundle does not load the gifter), and `liblogos_rln_module` 0.14.4
+declares the gifter the same way, so loading the membership module brings the
+allocator client and libp2p with it. The registry module and the verifier /
+producer modules stay undeclared on purpose: their cross-module clients are
+created lazily so a deployment missing, say, a producer module still loads
+(`lp.rs`).
 
 The e2e bring-up that does exactly this is
 `logos-rln-e2e/scenarios/consumer-gifter/run.sh:98-135`:
@@ -66,15 +84,21 @@ must be called again, by whatever supervises the daemon.
 
 | Key | Required | Default | Meaning |
 |---|---|---|---|
-| `config` | yes | — | the registry's ConfigState account (64-hex). Passed verbatim to `register_member` and `get_membership`. One gifter serves exactly one registry (§3.1). |
+| `config` | yes | — | the registry's ConfigState account (64-hex or base58; canonicalised to lowercase hex). The registry a request naming none is served on. |
+| `registries` | no | — | further served registries: `["<config>", {"config": "<config>", "maxRateLimit"?: N}]`; an entry without a cap takes the global one. A request names its registry on the wire (request field 100; the membership module sends its scope's); one not served is refused `registry not served: <cfg>` before any verifier runs (§3.1). The `serve` reply lists them. |
 | `wallet` | yes | — | the payer account id. Must be a key the registry module's wallet holds. `""` means "the registry module's own payer" (`liblogos_lez_rln_module.lidl:60-68`, `logos-rln-modules`). |
 | `authVerifiers` | no | absent = **open gifter** | `{"<auth_type>": {"module": "<logos module>", "config"?: {...}}}`. Present-but-malformed fails `serve` rather than degrading to open (`server.rs:85-106`). |
-| `consumedNullifiersPath` | no | `""` = replay protection in memory only | append-only file, one lowercase `<type>:<nullifier>` per line (`auth.rs:10-41`). Without it a restart forgets every spent credential. |
-| `maxRateLimit` | no | `100` (`DEFAULT_MAX_RATE`, `server.rs:39`) | requests above it are clamped, silently (`server.rs:218-221`). A request with no rate gets this value. |
+| `consumedNullifiersPath` | no | `""` = replay protection in memory only | append-only file, one lowercase `<registry>:<type>:<nullifier>` per line (`auth.rs:10-41`); a credential buys one membership per registry. Without it a restart forgets every spent credential. |
+| `maxRateLimit` | no | `100` (`DEFAULT_MAX_RATE`, `server.rs:39`) | requests above it are clamped, silently. A request with no rate gets this value. Per registry when the `registries` entry sets its own. |
+| `advertise` | no | `true` | publish the served (registry, auth type) pairs through libp2p service discovery (§2.5). Left to the default, a node without discovery mounted serves unadvertised and the reply carries `advertiseError`; an explicit `true` makes that fail `serve`. `false` serves unadvertised. At most 8 pairs fit one advertisement. The reply carries `advertised`, `serviceId`, `serviceData`. |
 
 Re-calling `serve` refreshes the configuration (new wallet, new verifier set).
 The protocol is mounted and the worker spawned only once; the consumed
-nullifier set is merged, never replaced (`server.rs:108-129`).
+nullifier set is merged, never replaced (`server.rs:108-129`); an
+advertisement whose data changed is stopped and started again — by the
+worker between two accepts once it runs (the reply says `advertisePending`),
+because `protocolAcceptStream` blocks libp2p_module's call dispatcher and
+the module answers nobody else while one is pending (see §4.4).
 
 Fixed constants an operator should know (`server.rs:24-40`, `wire.rs:8`):
 
@@ -95,12 +119,13 @@ client                                   gifter daemon
   |  protocolRequest ------------------>  protocolAcceptStream (libp2p_module)
   |  RlnGifterRequest {                    |
   |    request_id, authentication_type,    |  1. decode; commitment must be 32 B
-  |    authentication_payload,             |  2. settle rate = min(requested||100, maxRateLimit)
-  |    identity_commitment, rate_limit? }  |  3. if authVerifiers: look up type -> verify_auth
-  |                                        |     nullifier? -> reserve (reject if spent)
-  |                                        |  4. liblogos_lez_rln_module.register_member(config, wallet, idc, rate)
-  |                                        |  5. poll get_membership(config, idc) until registered:true (<=150 s)
-  |  RlnGifterResponse {         <-------  |  6. persist nullifier; reply with the chain's leaf_index
+  |    authentication_payload,             |  2. registry = field 100 || config; must be served
+  |    identity_commitment, rate_limit?,   |  3. settle rate = min(requested||100, that registry's maxRateLimit)
+  |    config_account_id? (100) }          |  4. if authVerifiers: look up type -> verify_auth (+ the stream's peer id)
+  |                                        |     nullifier? -> reserve <registry>:<type>:<nul> (reject if spent), persisted at once
+  |                                        |  5. liblogos_lez_rln_module.register_member(registry, wallet, idc, rate)
+  |                                        |  6. poll get_membership(registry, idc) until registered:true and usable (<=150 s)
+  |  RlnGifterResponse {         <-------  |  7. reply with the chain's leaf_index
   |    leaf_index, transaction_hash,       |
   |    config_account_id (field 100) }     |
 ```
@@ -129,13 +154,28 @@ Steps 1–3: `server.rs:195-305`. Steps 4–6: `register()` at `server.rs:369-42
 (introduced by commit `01dd6f8`: `register_member`'s own leaf is a pre-submit
 estimate, so the leaf is read back from the chain).
 
-Failure semantics for an authenticated credential (`server.rs:320-333`):
+Failure semantics for an authenticated credential (`server.rs`,
+`handle_request`): the reservation is written to the nullifier file the
+moment it is taken, so a gifter restarted during the <=150 s confirmation
+wait cannot grant the same credential a second membership.
 
-- `register_member` itself failed (`NotSubmitted`): nullifier released, the
-  credential can be used again.
-- submitted but not on chain within 150 s (`Unconfirmed`): nullifier stays
-  spent and is persisted; the reply says "it may still land". The client's own
-  registry poller will usually still see it go active (§5.3).
+- nothing was submitted (`NotSubmitted`: the registry module refused,
+  `send_failed`, a transport error, an expired membership already on the
+  commitment): the reservation is released, in memory and in the file, and
+  the credential can be used again. The reply's failure message starts with
+  `not submitted: `, which tells the client it may ask the next allocator.
+- submitted but not on chain within 150 s (`Unconfirmed`): the reservation
+  stays; the reply starts with `unconfirmed: ` and says "it may still land",
+  and the client stops there. The client's own registry poller will usually
+  still see it go active (§5.3).
+- a crash between the reservation and a `NotSubmitted` verdict leaves the
+  credential spent: the operator removes its line from the file.
+- a spent credential presented again WITH the same commitment (a retry after
+  a reply the client never read) is answered with the membership that
+  commitment holds, when the registry shows it usable; nothing new is spent.
+  With another commitment it is a replay and refused.
+- a re-`serve` naming another `consumedNullifiersPath` carries the spent set
+  into the new file first.
 
 Spec deviations to be aware of: `merkle_root` is always empty and
 `block_number` always 0 (`server.rs:406-409`); `config_account_id` rides in a
@@ -150,10 +190,10 @@ to change later.
 
 ### 2.1 What the PeerId does
 
-The client never discovers a gifter. It is handed a `(peer id, multiaddr)`
-pair and dials exactly that: `rln_gifter_module.request` passes
+A client dials a `(peer id, multiaddr)` pair — one it discovered (§2.5) or
+the configured one: `rln_gifter_module.request` passes
 `{"peerId", "multiaddrs":[addr], "proto": "/logos/rln/membership/1.0.0"}` to
-`libp2p_module.protocolRequest` (`client.rs:103-110`), which does
+`libp2p_module.protocolRequest` (`client.rs`, `ask`), which does
 `connectPeer(peerId, multiaddrs)` then `dial(peerId, proto)`
 (`logos-libp2p-module-master/src/protocol_bridge.cpp:72-78`).
 
@@ -167,12 +207,15 @@ its commitment to a stranger, wait 300 s and fail.
 
 Consequences:
 
-- **The PeerId is a deployment artifact.** Every client configuration embeds it.
-  If it changes, every client must be re-pointed. It must therefore come from a
-  **persisted identity key**, never from a fresh key per start.
-- **It travels out of band** with a routable multiaddr. There is no
-  `/p2p/<id>` suffix convention in the current callers; the two values are
-  separate fields everywhere (`gifter_peer_id`, `gifter_multiaddr`).
+- **A configured PeerId is a deployment artifact.** A client configuration
+  that pins one embeds it; if it changes, every such client must be
+  re-pointed. It must therefore come from a **persisted identity key**, never
+  from a fresh key per start. A discovered allocator carries its current peer
+  id and addresses in its signed record, so discovery alone survives a key
+  change.
+- **A configured pair travels out of band** with a routable multiaddr. There
+  is no `/p2p/<id>` suffix convention in the current callers; the two values
+  are separate fields everywhere (`gifter_peer_id`, `gifter_multiaddr`).
 - **Linkability.** The gifter learns `(client PeerId, client IP,
   identity_commitment)`. LIP-158 declares this out of scope and points at
   stealth commitments as future work (`rln-membership-service.md`,
@@ -241,34 +284,76 @@ lives on the `allocator-data` volume and the entrypoint refuses to start if
 the PeerId it derives differs from the published one. Testers dial the
 host's public address; the Noise handshake binds the PeerId, not the IP.
 
-### 2.5 Not implemented
+### 2.5 Discovery (since 0.5.0)
 
-- LIP-158 Appendix A discovery (advertising `/rln/membership/<version>` and
-  `/rln/membership/<version>/<auth_method>` through capability discovery).
-- Any client-side list of gifters, fallback or retry across gifters. One
-  `(peer id, multiaddr)` per `register_membership` call.
+`serve` advertises the node through `libp2p_module`'s service discovery
+(the kademlia-based Logos capability discovery, `discoStartAdvertising`)
+under the protocol id as the service id, `/logos/rln/membership/1.0.0`
+(LIP-158 Appendix A's `/rln/membership/<version>` shape). What it serves
+rides in the advertisement's data (`wire.rs`, `service_data`): the byte
+`'1'` (layout version) followed by the base64 (no padding) of the sorted
+3-byte sha256 prefixes of `<registry canonical hex>/<auth_type>` for every
+served (registry, auth type) pair — an open gifter lists `<registry>/` —
+at most 8 pairs (libp2p caps service data at 33 bytes; `serve` refuses more).
+
+One advertisement per node, not one per pair, because nim-libp2p's registrar
+scores a second advertisement from an IP already in its cache as fully
+similar (its Sybil defence) and makes it wait a whole advertisement
+lifetime (900 s); two ads from one node then alternate at every renewal.
+Appendix A's per-method ids (`/rln/membership/<version>/<auth_method>`) are
+therefore not used; the LIP should say so.
+
+A client (`request` with `discover`, default true, or `discover` on its
+own) registers interest in the id, looks it up at once and after 2, 4 and
+8 s until a record names its pair, keeps the records whose data lists the
+pair's digest, and tries the candidates in turn — rotated by the
+commitment so clients spread over several allocators — while none has read
+the request: a dial or write failure, or a refusal before registration
+(`auth_success=false`: registry not served, unsupported or rejected vector,
+spent credential) moves on; anything after the request was read (a read
+failure, a registration that failed or is unconfirmed, a grant on another
+registry) stops. The configured `gifterPeerId`/`gifterMultiaddr` pair, if
+any, is tried after the discovered ones; `discover:false` dials it alone.
+The reply names who granted (`gifterPeerId`, `discovered`).
+
+What both sides need: `libp2p_module` created with
+`mountServiceDiscovery: true` and `bootstrapNodes` naming a reachable
+registrar (the delivery module passes the node's plugin-discovery
+bootstrap peers). An allocator registers its advertisement with the peers
+in its routing table at serve time and otherwise waits for the 10-minute
+maintenance heartbeat, so bring the allocator up bootstrapped, then serve.
+A node without discovery mounted serves unadvertised (`advertiseError`)
+and a client there reports `discovery unavailable` and goes on to the
+configured pair. Both the allocator's data and a record's data are plain
+text on the module wire; lookups return the data base64-encoded.
+
+Not implemented: a client-side list of pinned gifters (one configured pair
+per call), and retrying a candidate that read the request.
 
 ---
 
 ## 3. Chain side: registry, payer, funding
 
-### 3.1 One registry per gifter
+### 3.1 Registries: the request names one, the gifter serves several
 
-`config` names the registry. The wire carries no registry, app or
-`rln_identifier` field (`wire.rs:10-17`), so a gifter cannot tell which
-application or registry a request is for; it registers every accepted
-commitment into its one `config`.
+`config` names the default registry and `registries` the further ones
+(§1.2). The request carries the registry it wants in field 100
+(`config_account_id`, beside the spec like the reply's); the membership
+module fills it with its scope's registry (`register_membership`'s
+`logos:<ref>:<config-hex>`), and `rln_gifter_module.request` takes it as
+`config`. The gifter resolves it first: one it does not serve is refused
+`registry not served: <cfg>` with no verifier call and nothing paid; a
+request naming none is served on `config`. Spent credentials are keyed per
+registry, so one credential buys one membership on each served registry.
 
-The client's `registry_id` (`logos:<ref>:<config-hex>`,
-`logos-rln-modules/logos-rln-module/docs/wire-binding.md:320-325`) must denote
-the same account. If it does not, the gifter registers into its registry, the
-client's poller never sees the membership in *its* registry, and the record
-goes `pending → failed` after 300 s with no diagnostic: the client never
-compares the returned `config_account_id` with its own registry (gap, §7).
-Pinned by the e2e `rln-allocator` scenario (gifter serving registry 1, client
-registering on registry 2): `failed` after 306 s, `failed_reason =
-"confirmation_window_elapsed"`, the registry never mentioned. The gifter did
-pay for a membership nobody will use.
+The grant names the registry it landed on (`config_account_id`), and both
+the gifter client and the membership module compare it with what they
+asked for: a grant elsewhere is `gifter registered on <x>, not the
+requested <y>` / `failed_reason = "gifter_failed: registered on <x>, not
+<y>"` at once, not a `confirmation_window_elapsed` after 300 s. Before
+2026-11-05 none of this existed: one gifter served one registry, the wire
+carried none, and the e2e `rln-allocator` scenario pinned the silent 306 s
+failure; it now pins the refusal.
 
 ### 3.2 Who pays and what
 
@@ -355,10 +440,16 @@ speak the JSON and the bytes.
   skipped entirely (`server.rs:223`).
 - The rate is settled **before** verification, so the verifier judges the
   number that will be registered (`server.rs:215-221`).
-- A returned `nullifier` is lowercased, namespaced `"<type>:<nul>"`, checked
-  against the consumed set and reserved before the chain call; released only
-  if nothing was submitted; appended to `consumedNullifiersPath` on success or
-  on an unconfirmed submit (`server.rs:244-305, 309-333`, `auth.rs`).
+- A returned `nullifier` is lowercased, namespaced
+  `"<registry>:<type>:<nul>"`, checked against the consumed set and reserved
+  before the chain call; released only if nothing was submitted; appended to
+  `consumedNullifiersPath` on success or on an unconfirmed submit
+  (`server.rs`, `auth.rs`). A nullifier file written before 2026-11-05 holds
+  `<type>:<nul>` lines: prefix each with the registry it was spent on (the
+  config account as lowercase hex) or the credentials are spendable again.
+- The verifier also gets `peer_id`, the requester as the libp2p stream
+  proved it (`libp2p_module` ≥ 1.1.0 reports it from `protocolAcceptStream`);
+  the `peer` scheme judges that and nothing else.
 
 An "app-specific validator" is therefore: the app ships a verifier module
 (loaded in the allocator daemon, named here) and usually a producer module
@@ -383,6 +474,8 @@ recipes per scheme: `docs/auth-allowlists.md`.
 | `keycard-allowlist` | a card whose identity key is allowlisted | `{"allowlist": [ident_pub…]}` | the identity key | only as far as the allowlist is |
 | `keycard-attestation` | a card whose identity key a trusted CA certified | `{"trusted_cas": [pubkey…]}` (`KEYCARD_TRUSTED_CAS`, default = Status production CA) | `keccak256(ident_pub)`, one per card | yes (hardware) |
 | `logos-pow-claim` | the node's zkSign key owns a settled PoW reward claim on chain | `{"node_url", "audience"?, "min_payout"?, …}` (`docs/auth-pow-claim.md` §5; `POW_NODE_URL`) | the claim's `pow_nullifier` | yes (work), incomplete (§6 of that doc) |
+| `peer-any` | the request arrived on a libp2p stream the requester's node key authenticated; any peer, one membership per peer id per registry (`auth-vectors.md` §3.3) | `{}` (`"audience"?`) | the peer id (multihash hex) | no: a peer id costs a key generation |
+| `peer-allowlist` | the same, for a listed peer id | `{"allowlist": ["12D3Koo…"…]}` | the peer id | only as far as the allowlist is |
 | `chat-installation` (design only) | — | — | — | no, identity only (`docs/auth-chat-installation.md` §7) |
 
 **Commitment-bound payloads need a producer module.** Both reference payloads
@@ -424,6 +517,14 @@ by `verify-chainless.sh` A11/A12 and `verify-local.sh` D9/D10.
 
 ### 4.4 Operator traps
 
+- **The allocator's `libp2p_module` answers only the serve worker.** The
+  worker's `protocolAcceptStream` is a condvar wait inside libp2p_module's
+  call dispatcher, so while one is pending (2 s at a time, back to back) any
+  other call to that libp2p_module — `peerInfo` from the CLI, a `discover`
+  or `request` on the same node, a second module — times out. An allocator
+  node is an allocator only; `serve` advertises before it spawns the worker
+  and hands later advertisement changes to the worker.
+
 - **A verifier module that is not loaded is not caught by `serve`.** The host
   defers the client creation, so the first real request fails
   (`tools/pow-claim-poc/README.md`, corrections 16 and R2.4).
@@ -456,18 +557,19 @@ parsing at `rust-lib/src/lib.rs:660-739`):
 | key | value | notes |
 |---|---|---|
 | `delegated` | `"true"` (exact string) | selects the allocation protocol (`flat_bool_option`, `lib.rs:379`) |
-| `gifter_peer_id` | PeerId | required when delegated |
-| `gifter_multiaddr` | multiaddr without `/p2p/` | required when delegated |
+| `discover` | `"true"` (default) / `"false"` | ask the allocators advertising the (registry, auth_type) pair first (§2.5); `"false"` dials the configured pair alone (0.15.0) |
+| `gifter_peer_id` | PeerId | together with `gifter_multiaddr`, or neither; asked after the discovered ones. Required when `discover` is `"false"` |
+| `gifter_multiaddr` | multiaddr without `/p2p/` | see `gifter_peer_id` |
 | `auth_type` | vector name | optional; omitted = unauthenticated request for an open gifter |
 | `auth_payload` **xor** `auth_provider` | hex payload, or a producer module name | exactly one, and only with `auth_type`; checked before a credential is minted |
 | `auth_args` | opaque string | forwarded verbatim to the producer |
 | `rate_limit` | decimal string | default 100 (`DEFAULT_RATE_LIMIT`, `lib.rs:397`); out-of-bounds fails before minting |
 
 The RLN module turns these into the gifter client's
-`{gifterPeerId, gifterMultiaddr, identityCommitment, rate, authType?,
-authPayload?, authProvider?, authArgs?}` (`lib.rs:471-491`) and calls
-`rln_gifter_module.request` through an untyped proxy with a 340 s budget
-(`provider.rs:190-199`).
+`{discover, config, identityCommitment, rate, gifterPeerId?,
+gifterMultiaddr?, authType?, authPayload?, authProvider?, authArgs?}`
+(`lib.rs`, `delegated_request_args`) and calls `rln_gifter_module.request`
+through its generated client with a 340 s budget (`provider.rs`).
 
 ### 5.2 What a client node must have loaded
 
@@ -475,7 +577,7 @@ authPayload?, authProvider?, authArgs?}` (`lib.rs:471-491`) and calls
 |---|---|
 | `liblogos_rln_module` | mints the identity, holds the keystore, owns the membership record and the confirmation poller |
 | `rln_gifter_module` | client half (`request`) |
-| `libp2p_module` | the client's own node; `createNode {"addrs":["/ip4/127.0.0.1/tcp/0"]}` + `start`. No mesh, no bootstrap (`consumer-gifter/run.sh:165-167`; UI: `membership.js:74-87`) |
+| `libp2p_module` | the client's own node; `createNode {"addrs":["/ip4/127.0.0.1/tcp/0"], "mountServiceDiscovery": true, "bootstrapNodes": [...]}` + `start` to discover allocators (§2.5); without discovery, the configured pair alone (`consumer-gifter/run.sh:165-167`; UI: `membership.js:74-87`) |
 | `liblogos_lez_rln_module` | **read-only** chain access for the poller (`get_membership`, roots). Its wallet is never funded (`consumer-gifter/run.sh:10-12, 153-160`) |
 | producer module (e.g. `keycard_capture_module`) | only if the vector needs one |
 
@@ -507,7 +609,7 @@ Funded versus gifted:
 | | Funded (`delegated` absent) | Gifted |
 |---|---|---|
 | who signs and pays | the client's own `liblogos_lez_rln_module` payer (`provider.rs` `LezRlnProvider::register_async`) | the allocator's `wallet` |
-| what the client needs | a funded, synced wallet | a `(peer id, multiaddr)` and optional auth material; chain read access |
+| what the client needs | a funded, synced wallet | a libp2p node with discovery, or a `(peer id, multiaddr)`, and optional auth material; chain read access |
 | identity, keystore, poller, confirmation | identical | identical |
 | automatic provisioning at `start()` | yes (`ensure.rs`, funded only) | **no** |
 
@@ -644,6 +746,21 @@ pow-claim, ~74.2M each, nullifiers persisted, verifier 21–28 ms): the
 three-vector allocator, public exposure and the hosted registry are all
 exercised end to end; what remains is a real tester through
 `register_membership` with a usable identity.
+**Two registries on LEZ v0.4.0-rc1 (2026-11-05, e2e `rln-allocator` on
+feat/two-registries, run 20261105-161119):** PASS — one allocator (persisted
+key) serving the delivery registry D and the mix registry M with
+`peer-any` and `eth-allowlist` on `rln_auth_module`, two never-funded
+clients registering through `liblogos_rln_module.register_membership`:
+c1 `peer-any` on D (leaf 7), the same peer on D refused `credential already
+used: <D>:peer-any:<peer>`, the same peer on M (leaf 5), c2 on D (leaf 8),
+c1 `eth-allowlist` through `rln_sign_module` (leaf 9) and c2's address
+refused by name, an unserved registry refused `registry not served` and an
+invalid commitment refused client-side, the allocator restarted on the same
+PeerId with c1 still refused and c2 landing on M (leaf 6); 369,568,048 paid
+for five memberships (price 1e6 each, the rest fees). Client-side trap: once
+a registry holds two of a node's memberships, `get_membership_state` by
+scope answers `ambiguous_selection`; the scenario polls the record by
+`membership_hash` through `get_memberships` instead.
 **Status:** steps 1–6 are implemented as `tools/allocator/run-allocator.sh`
 (`up` / `serve` / `status` / `down`, persisted node key, `allocator.json`
 hand-off; see `tools/allocator/README.md`). `tools/allocator/verify-chainless.sh`
@@ -778,8 +895,8 @@ Missing:
   stack notices until clients fail to dial. Needs either a hard failure in
   `libp2p_module` or a post-start identity/address assertion in every
   bring-up path.
-- One registry per gifter. Serving several apps or registries means several
-  daemons.
+- One wallet per gifter: every served registry is paid from `serve`'s
+  `wallet`.
 - Funding is manual (no faucet). The hosted testnet run exists in
   `tools/allocator/docker/` (§6, 2026-10-16 records) and waits on payer
   funds; wallet staleness silently drops registrations and
@@ -813,10 +930,11 @@ Missing:
   that returns the commitment before the gifter request — and the demo-grade
   key custody of the new producer (plaintext key file).
 - `auth_success` is not surfaced to the client as a distinct outcome.
-- No app or registry identifier on the wire, so a verifier cannot scope its
-  decision per app, and a single gifter cannot route to several registries.
+- No app identifier on the wire (the registry is there since 2026-11-05),
+  so a verifier cannot scope its decision per app.
 - The rate clamp is not reported in the reply.
-- No advertisement of supported vectors (LIP-158 Appendix A).
+- The advertisement names the served (registry, vector) pairs as digests
+  (§2.5), not the vectors by name: a client must know which vector it wants.
 - pow-claim is incomplete (`docs/auth-pow-claim.md` §6C, §7).
 
 ### Goal C: users configuring their RLN module to use the allocator
@@ -844,11 +962,12 @@ Missing:
   auto-provisioning is funded-only, so applications must call
   `register_membership` themselves.
 - No delivery or chat configuration key reaches the allocation protocol.
-- The client does not cross-check the gifter's `config_account_id` against its
-  own `registry_id`; a mismatch is a silent failure, pinned at 306 s with
-  `failed_reason = "confirmation_window_elapsed"` (§3.1), and the gifter has
-  paid for an orphan membership by then.
-- One gifter per call; no list, fallback or discovery.
+- (closed 2026-11-05) The client cross-checks the gifter's
+  `config_account_id` against its own registry, and the gifter refuses a
+  registry it does not serve (§3.1).
+- (closed 2026-11-06) Allocators are discovered through libp2p service
+  discovery and tried in turn; the configured pair is the fallback (§2.5).
+  Still one configured pair per call.
 - The deterministic `request_id` is never actually reused: a retry mints a
   fresh identity (`lib.rs:787`), so LIP-158's dedup intent is not exercised.
 - Stacked timeouts set by hand: RLN module 340 s > gifter client 190 s >

@@ -17,9 +17,18 @@ delegated to `liblogos_lez_rln_module`; RLN proof generation and verification
     commitment (supplied by the RLN membership module, which keeps the
     identity secret), obtains the auth payload for the selected vector (raw
     `authPayload` or the `authProvider` module's `produce_auth`), sends the
-    request to a gifter peer over `libp2p_module`, and returns the granted
+    request to an allocator over `libp2p_module` — the ones advertising the
+    (registry, auth type) pair through libp2p service discovery first, in
+    turn while none has read the request, then the configured
+    `gifterPeerId`/`gifterMultiaddr` pair if any — and returns the granted
     allocation. The identity secret never reaches this module.
+  - `discover(args_json)` — client side. The allocators currently
+    advertising a (registry, auth type) pair, `{serviceId, candidates:
+    [{peerId, addrs}]}`.
   - `serve(args_json)` — gifter side. Mounts `/logos/rln/membership/1.0.0`,
+    advertises the served (registry, auth type) pairs under that id through
+    libp2p service discovery (one advertisement per node, the pairs as
+    digests in its data; `advertise:false` to serve unadvertised),
     authenticates each request through the configured vector's `verify_auth`
     module, and registers the commitment on-chain via
     `liblogos_lez_rln_module.register_member` on a single serialized worker,
@@ -75,24 +84,28 @@ configuration only:
 
 - **Gifter node**: `serve`'s `authVerifiers` maps each accepted type to its
   verifier — `{"<type>": {"module": …, "config"?: {…}}}`. The opaque
-  `config` rides along on every verify call, so verifiers stay stateless. A
-  verdict `nullifier` opts the spent credential into shared replay
-  protection: reserved before the on-chain register, rolled back on its
-  failure, persisted to the append-only consumed-nullifier file on success.
-  No `authVerifiers` = an open gifter.
+  `config` rides along on every verify call, with the requester's transport
+  peer id, so verifiers stay stateless. A verdict `nullifier` opts the spent
+  credential into shared replay protection: reserved before the on-chain
+  register, rolled back on its failure, persisted to the append-only
+  consumed-nullifier file on success, keyed per registry (one membership
+  per credential per registry). No `authVerifiers` = an open gifter.
 - **Requester**: `request` takes `authType` plus either a raw `authPayload`
   (hex the application produced itself) or an `authProvider` producer module.
   No `authType` = an unauthenticated request.
 
 An `auth_type` is a composition, `<scheme>-<authoriser>`: a **scheme** is
 how the binding digest gets signed and which identity that proves (`eth`,
-`lez`, `logos`, `keycard`); an **authoriser** is how that identity gets
-accepted (`allowlist`, `attestation`, `pow-claim`). Every scheme but eth
-signs the same binding — `sha256("logos/rln/<auth_type>/2" ‖ commitment ‖
-rate_max ‖ audience ‖ evidence)` — and every payload has the same frame
-(`0x02 ‖ scheme part ‖ evidence ‖ rate_max`); eth signs the EIP-191 message
-over the bare commitment so any wallet can. The modules compose the pieces
-they ship into a registry and answer every composition that exists:
+`lez`, `logos`, `keycard`, `peer`); an **authoriser** is how that identity
+gets accepted (`allowlist`, `any`, `attestation`, `pow-claim`). Every
+scheme but eth and peer signs the same binding —
+`sha256("logos/rln/<auth_type>/2" ‖ commitment ‖ rate_max ‖ audience ‖
+evidence)` — and every payload has the same frame (`0x02 ‖ scheme part ‖
+evidence ‖ rate_max`); eth signs the EIP-191 message over the bare
+commitment so any wallet can, and peer signs nothing: the libp2p stream the
+request arrived on already proved the requester's peer id. The modules
+compose the pieces they ship into a registry and answer every composition
+that exists (`<scheme>-any` for each scheme too); the ones with a story:
 
 | `auth_type` | proves | nullifier |
 |---|---|---|
@@ -102,6 +115,7 @@ they ship into a registry and answer every composition that exists:
 | `keycard-allowlist` | an allowlisted Keycard signed (IDENTIFY_CARD) | the card's identity key |
 | `keycard-attestation` | a Keycard certified by a trusted CA signed | `keccak256(ident_pub)`, once per card |
 | `logos-pow-claim` | a node key that owns a settled PoW reward claim signed | the claim's nullifier |
+| `peer-any` | the request came over an authenticated libp2p stream — any peer, once per registry | the peer id |
 
 Normative: [`docs/auth-vectors.md`](docs/auth-vectors.md). Per-scheme
 operator and tester guidance: [`docs/auth-allowlists.md`](docs/auth-allowlists.md).
@@ -110,10 +124,14 @@ Authentication gates only the client↔gifter exchange; RLN proofs are untouched
 
 ## Registration
 
-The protocol never touches a chain itself. The gifter hands
-`(identityCommitment, rateLimit)` to `liblogos_lez_rln_module.register_member`,
-which funds the transaction from the account `serve` names as `wallet` and
-signs it. That call answers when the transaction is accepted, and on LEZ
+The protocol never touches a chain itself. A gifter serves one or more
+registries (`serve`'s `config`, plus `registries` for further ones, each
+with its own `maxRateLimit`); the request names the one it wants (the
+membership module sends its scope's registry), one the gifter does not
+serve is refused at once, and a request naming none gets `config`. The
+gifter hands `(identityCommitment, rateLimit)` to
+`liblogos_lez_rln_module.register_member` on that registry, which funds the
+transaction from the account `serve` names as `wallet` and signs it. That call answers when the transaction is accepted, and on LEZ
 v0.3.0 the tree assigns the leaf, so the gifter then reads the membership back
 (`get_membership`) and replies with the leaf the chain holds
 (`leafIndex`, `transactionHash` of the submitted transaction). A registration

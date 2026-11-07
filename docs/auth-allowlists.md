@@ -43,14 +43,14 @@ Common rules:
 
 ## Summary
 
-| | `eth-allowlist` | `logos-allowlist` | `lez-allowlist` | `keycard-allowlist` |
-|---|---|---|---|---|
-| Who holds the key | the module on the tester's client (`eth_sign_key.hex`, 0600, under the module's persistence dir), or any wallet | the tester's own logos-blockchain node (its PoWClaim key); nothing is stored in the module | the module on the tester's client (`lez_sign_key.hex`, 0600) | the card |
-| Producer `auth_args` | `private_key`? | `node_url`, `public_key`?, `http_timeout_ms`?, `rate_max`, `audience` | `private_key`?, `rate_max`, `audience` | `rate_max`, `audience` |
-| Allowlist entry | `0x` + 40 hex address (the Docker reader accepts it without `0x` or in mixed case) | 64 hex public key K (little-endian, as the node prints it); `0x` and uppercase accepted | 64 hex account id, or its base58 form | 66 hex compressed identity key |
-| Nullifier | the address | K | the account id, 64 hex | the identity key, 66 hex |
-| Operator file (Docker) | `config/allowlist.txt` | `config/allowlist-logos.txt` | `config/allowlist-lez.txt` | (not served by the Docker allocator yet) |
-| Tester recipe | testers doc A | testers doc D | testers doc E | — |
+| | `eth-allowlist` | `logos-allowlist` | `lez-allowlist` | `keycard-allowlist` | `peer-allowlist` |
+|---|---|---|---|---|---|
+| Who holds the key | the module on the tester's client (`eth_sign_key.hex`, 0600, under the module's persistence dir), or any wallet | the tester's own logos-blockchain node (its PoWClaim key); nothing is stored in the module | the module on the tester's client (`lez_sign_key.hex`, 0600) | the card | the client's `libp2p_module` (its node key; nothing is signed) |
+| Producer `auth_args` | `private_key`? | `node_url`, `public_key`?, `http_timeout_ms`?, `rate_max`, `audience` | `private_key`?, `rate_max`, `audience` | `rate_max`, `audience` | `rate_max` (the payload is the bare frame; `identity` needs `peer_id`) |
+| Allowlist entry | `0x` + 40 hex address (the Docker reader accepts it without `0x` or in mixed case) | 64 hex public key K (little-endian, as the node prints it); `0x` and uppercase accepted | 64 hex account id, or its base58 form | 66 hex compressed identity key | the PeerId as libp2p prints it (base58) or its multihash hex |
+| Nullifier | the address | K | the account id, 64 hex | the identity key, 66 hex | the multihash, lowercase hex |
+| Operator file (Docker) | `config/allowlist.txt` | `config/allowlist-logos.txt` | `config/allowlist-lez.txt` | (not served by the Docker allocator yet) | (not served by the Docker allocator yet) |
+| Tester recipe | testers doc A | testers doc D | testers doc E | — | — |
 
 ## eth
 
@@ -104,6 +104,20 @@ Common rules:
 - Verifier config: `{"allowlist":["<66 hex compressed key>", …]}`.
 - Refusals: `card not allowlisted`, `attestation parse failed: …`,
   `attestation verification failed: …`.
+
+## peer
+
+- No key on the client beyond its libp2p node's: the gifter reads the
+  requester's peer id off the accepted stream (`libp2p_module` ≥ 1.1.0) and
+  that is the identity. The payload is the bare frame (`02 ‖ rate_max LE`,
+  `rln_sign_module.produce_auth` makes it, or `authPayload:
+  "026400000000000000"` for rate_max 100 by hand).
+- `identity` with `{"scheme":"peer","args":{"peer_id":"<from libp2p_module.peerInfo>"}}`
+  -> `id` = the multihash hex an operator allowlists; `peer-any` needs no list.
+- Verifier config: `{"allowlist":["12D3Koo…" | "<hex>", …]}`; `peer-any`
+  takes `{}`.
+- Refusals: `peer not allowlisted`, `allowlist is empty`; a gifter whose
+  bridge reports no peer id answers `{"error":"transport peer id unavailable…"}`.
 
 ## Docker allocator
 

@@ -12,7 +12,7 @@ Rust form.
 
 - `types`: the two methods' JSON shapes (`ProduceRequest` / `ProduceReply`,
   `VerifyRequest` / `Verdict`), the caller-side parsers, and
-  `namespaced_nullifier` (the gifter's `<auth_type>:<nullifier>`).
+  `namespaced_nullifier` (the gifter's `<registry>:<auth_type>:<nullifier>`).
 - `AuthType`: `<scheme>-<authoriser>`, split at the first dash; its digest
   domain `logos/rln/<name>/2`.
 - `Binding` + `binding_digest`: what gets signed; `frame` / `unframe`: the
