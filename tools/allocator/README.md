@@ -25,6 +25,7 @@ export ALLOCATOR_HOME=/var/lib/rln-allocator          # node_key.hex, consumed_n
 export LISTEN_ADDR=/ip4/0.0.0.0/tcp/9000
 export ADVERTISE_ADDR=/ip4/203.0.113.7/tcp/9000       # what clients dial; required when binding 0.0.0.0
 export REGISTRY_CONFIG=<registry ConfigState account>
+export KAD_BOOTSTRAP_NODES=/dns4/<host>/tcp/30303/p2p/<peerId>,…   # DHT peers to bootstrap from; empty = pinned peer id only
 export PAYER=                                         # "" = the registry module's own payer
 export AUTH_VERIFIERS='{"eth-allowlist":{"module":"rln_auth_module","config":{"allowlist":["0x…"]}}}'
 export DAEMON_ENV="LEZ_RLN_SEQUENCER=https://… LEZ_RLN_TREE_ID_HEX=… LEZ_RLN_PAYER=… LEZ_RLN_PAYER_KEY=…"
@@ -55,6 +56,14 @@ key, and point the client's `registry_id` at the same config account.
   "protocol": "/logos/rln/membership/1.0.0"
 }
 ```
+
+With `KAD_BOOTSTRAP_NODES` set, `up` creates the libp2p node with
+`mountKad:true`, `mountServiceDiscovery:true` and those peers as
+`bootstrapNodes`, and `serve` is sent `advertise:true` and
+`advertiseAddrs:[ADVERTISE_ADDR]`: the allocator is published on the DHT and a
+client finds it from the registry alone (`docs/running-an-allocator.md` §2.5).
+`serve` waits up to 20 s for a connected peer before the first advertisement.
+`allocator.env.testnet-example` lists the six logos.test fleet entry nodes.
 
 Clients pass `gifter_peer_id` / `gifter_multiaddr` (plus `auth_type` and
 `auth_payload` or `auth_provider`) as RegistryOptions to

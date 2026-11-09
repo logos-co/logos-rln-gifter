@@ -12,7 +12,7 @@ delegated to `liblogos_lez_rln_module`; RLN proof generation and verification
 ## Modules
 
 - **`rln_gifter_module`** (`rust/rln-gifter-module`) — the gifter protocol,
-  client and server, vector-agnostic, exposing two methods:
+  client and server, vector-agnostic, exposing these methods:
   - `request(args_json)` — client side. Takes the caller's RLN identity
     commitment (supplied by the RLN membership module, which keeps the
     identity secret), obtains the auth payload for the selected vector (raw
@@ -24,11 +24,16 @@ delegated to `liblogos_lez_rln_module`; RLN proof generation and verification
     allocation. The identity secret never reaches this module.
   - `discover(args_json)` — client side. The allocators currently
     advertising a (registry, auth type) pair, `{serviceId, candidates:
-    [{peerId, addrs}]}`.
+    [{peerId, addrs}], joined, peers}`; it waits up to 20 s for an outbound
+    peer, and `joined:false` means none connected. A node that cannot discover
+    is the error `discovery unavailable: <msg>`.
   - `serve(args_json)` — gifter side. Mounts `/logos/rln/membership/1.0.0`,
     advertises the served (registry, auth type) pairs under that id through
     libp2p service discovery (one advertisement per node, the pairs as
-    digests in its data; `advertise:false` to serve unadvertised),
+    digests in its data; `advertise:false` to serve unadvertised;
+    `advertiseAddrs` to publish a signed record for exactly those dial
+    addresses; the first advertisement waits up to 20 s for an outbound peer
+    and the reply's `advertisedToPeers` is the count it was placed with),
     authenticates each request through the configured vector's `verify_auth`
     module, and registers the commitment on-chain via
     `liblogos_lez_rln_module.register_member` on a single serialized worker,

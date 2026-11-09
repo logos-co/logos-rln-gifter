@@ -38,6 +38,13 @@ logos-delivery-module 0.3.6): the allocator advertises what it serves
 through libp2p service discovery and a client finds it without a configured
 peer id; the configured pair is the fallback (§2.5).
 
+Since 2026-11-09 (gifter 0.6.0, liblogos_rln_module 0.16.1,
+logos-delivery-module 0.3.7): the allocator's libp2p node is bootstrapped
+into the DHT (`KAD_BOOTSTRAP_NODES`), its advertisement can carry the
+operator's dial addresses (`advertiseAddrs`) and is re-placed when peers
+appear or the record ages, and discovery waits for a connected peer and
+reports why it found nothing (§2.5).
+
 Not covered here: how to write a vector module (read
 `crates/rln-auth-vector/README.md`), RLN proof generation, chain internals.
 Paths below are relative to the checkout named in each section; this repo's
@@ -90,7 +97,8 @@ must be called again, by whatever supervises the daemon.
 | `authVerifiers` | no | absent = **open gifter** | `{"<auth_type>": {"module": "<logos module>", "config"?: {...}}}`. Present-but-malformed fails `serve` rather than degrading to open (`server.rs:85-106`). |
 | `consumedNullifiersPath` | no | `""` = replay protection in memory only | append-only file, one lowercase `<registry>:<type>:<nullifier>` per line (`auth.rs:10-41`); a credential buys one membership per registry. Without it a restart forgets every spent credential. |
 | `maxRateLimit` | no | `100` (`DEFAULT_MAX_RATE`, `server.rs:39`) | requests above it are clamped, silently. A request with no rate gets this value. Per registry when the `registries` entry sets its own. |
-| `advertise` | no | `true` | publish the served (registry, auth type) pairs through libp2p service discovery (§2.5). Left to the default, a node without discovery mounted serves unadvertised and the reply carries `advertiseError`; an explicit `true` makes that fail `serve`. `false` serves unadvertised. At most 8 pairs fit one advertisement. The reply carries `advertised`, `serviceId`, `serviceData`. |
+| `advertise` | no | `true` | publish the served (registry, auth type) pairs through libp2p service discovery (§2.5). Left to the default, a node without discovery mounted serves unadvertised and the reply carries `advertiseError`; an explicit `true` makes that fail `serve`. `false` serves unadvertised. At most 8 pairs fit one advertisement. The reply carries `advertised`, `serviceId`, `serviceData`, `advertisedToPeers`. |
+| `advertiseAddrs` | no | absent = libp2p builds the record from the listen addresses | multiaddr strings; the advertisement is a signed record (`createXpr`) carrying exactly these addresses, which is what a client dials. Set it whenever the listen address is not the dialable one (a `0.0.0.0` bind, a NAT or forward). libp2p never refreshes a record supplied this way, so the worker re-places it every 600 s (§2.5). |
 
 Re-calling `serve` refreshes the configuration (new wallet, new verifier set).
 The protocol is mounted and the worker spawned only once; the consumed
@@ -235,8 +243,15 @@ All in `libp2p_module` (`logos-libp2p-module-master`), nothing in the gifter:
 
 Relevant `createNode` keys for an allocator: `privKey`, `addrs`, `transport`,
 `maxConnections`/`maxInConnections`/`maxOutConnections`/`maxConnsPerPeer`,
-`mountGossipsub:false`, `mountKad:false`, `mountServiceDiscovery:false`
-(the allocator needs none of the mesh).
+`mountGossipsub:false`, and, for an allocator that advertises,
+`mountKad:true`, `mountServiceDiscovery:true` and `bootstrapNodes`
+(`[{"peerId": …, "addrs": ["<multiaddr without /p2p/>"]}]`) naming DHT peers
+to join (§2.5). The tooling builds them from `KAD_BOOTSTRAP_NODES`, a
+comma-separated list of `<multiaddr>/p2p/<peerId>` (`al_bootstrap_nodes_json`
+in `tools/allocator/lib.sh`, `docker/lib-ctl.sh`); the testnet example lists
+the six logos.test fleet entry nodes. An empty list leaves the node joined to
+nobody: `serve` is not sent `advertise:true`, and the allocator is reachable
+by pinned peer id only.
 
 ### 2.3 How the existing deployments handle it
 
@@ -251,7 +266,8 @@ No current e2e scenario exercises a persisted key or a non-loopback address.
 
 ### 2.4 Addressing traps
 
-Binding `0.0.0.0` makes libp2p advertise `127.0.0.1`; in the containerised
+Binding `0.0.0.0` makes libp2p advertise `127.0.0.1` (unless `serve` is given
+`advertiseAddrs`, §2.5); in the containerised
 `mix` topology that produced a Noise peer-id mismatch and dropped connections.
 The fix was to bind and advertise the routable interface address explicitly
 (`logos-rln-e2e/harness/container/entrypoint.sh:10-22`). For a public
@@ -296,6 +312,24 @@ rides in the advertisement's data (`wire.rs`, `service_data`): the byte
 served (registry, auth type) pair — an open gifter lists `<registry>/` —
 at most 8 pairs (libp2p caps service data at 33 bytes; `serve` refuses more).
 
+The record that carries the advertisement is either libp2p's own, built from
+the node's listen addresses and republished by libp2p, or, when `serve` is
+given `advertiseAddrs`, a signed record (`createXpr`) for exactly those
+addresses. The tooling passes `advertiseAddrs` always: `[ADVERTISE_ADDR]`
+from `run-allocator.sh`, `[ADVERTISE_ADDR, ALT_MULTIADDRS…]` from the Docker
+entrypoint, and sends `advertise:true` when `KAD_BOOTSTRAP_NODES` is
+non-empty.
+
+An advertisement registers only with connected peers, so the first one waits
+up to 20 s (`JOIN_WAIT_S`) for an outbound peer (`connectedPeers`) and is
+placed regardless after that; the `serve` reply's `advertisedToPeers` is the
+count it was placed with. The worker, between two accepts, reads the outbound
+peer count at most every 10 s and re-places the advertisement when peers
+appear after one placed with none, and every 600 s for a caller-supplied
+record (its lifetime is 900 s and libp2p does not refresh it); each
+re-placement stops the advertisement and starts it again (a caller-supplied
+record with a sequence number above every earlier one).
+
 One advertisement per node, not one per pair, because nim-libp2p's registrar
 scores a second advertisement from an IP already in its cache as fully
 similar (its Sybil defence) and makes it wait a whole advertisement
@@ -304,8 +338,9 @@ Appendix A's per-method ids (`/rln/membership/<version>/<auth_method>`) are
 therefore not used; the LIP should say so.
 
 A client (`request` with `discover`, default true, or `discover` on its
-own) registers interest in the id, looks it up at once and after 2, 4 and
-8 s until a record names its pair, keeps the records whose data lists the
+own) registers interest in the id, waits up to 20 s for an outbound peer,
+then looks it up at once and after 2, 4 and 8 s until a record names its
+pair, keeps the records whose data lists the
 pair's digest, and tries the candidates in turn — rotated by the
 commitment so clients spread over several allocators — while none has read
 the request: a dial or write failure, or a refusal before registration
@@ -314,18 +349,42 @@ spent credential) moves on; anything after the request was read (a read
 failure, a registration that failed or is unconfirmed, a grant on another
 registry) stops. The configured `gifterPeerId`/`gifterMultiaddr` pair, if
 any, is tried after the discovered ones; `discover:false` dials it alone.
-The reply names who granted (`gifterPeerId`, `discovered`).
+The reply names who granted (`gifterPeerId`, `discovered`); a failure that
+an allocator's own reply ended (a refusal, a registration not submitted or
+unconfirmed) carries the same two keys beside `error`.
 
-What both sides need: `libp2p_module` created with
-`mountServiceDiscovery: true` and `bootstrapNodes` naming a reachable
-registrar (the delivery module passes the node's plugin-discovery
-bootstrap peers). An allocator registers its advertisement with the peers
-in its routing table at serve time and otherwise waits for the 10-minute
-maintenance heartbeat, so bring the allocator up bootstrapped, then serve.
-A node without discovery mounted serves unadvertised (`advertiseError`)
-and a client there reports `discovery unavailable` and goes on to the
-configured pair. Both the allocator's data and a record's data are plain
-text on the module wire; lookups return the data base64-encoded.
+`discover` answers `{serviceId, candidates:[{peerId, addrs}], joined,
+peers}`: `joined` is whether an outbound peer connected within the 20 s wait,
+`peers` how many are connected, and `candidates` is empty when none is placed
+or the node joined nobody. A discovery miss reads as one of three texts:
+
+| Text | Meaning | Retry |
+|---|---|---|
+| `discovery unavailable: <msg>` | this node cannot discover: no service discovery mounted, libp2p down | no (permanent) |
+| `discovery not joined: no connected peer after 20s` | no outbound peer to search through | yes |
+| `no allocator advertises <registry>/<auth type>` | peers connected, no record names the pair | yes |
+
+`request` with a miss goes on to the configured pair, if any, and otherwise
+fails with `no allocator granted and none is configured: <text>`. The
+membership module (`liblogos_rln_module` 0.16.1) treats the last two as
+retryable: after a miss it probes `discover` every 60 s while it waits for
+funds, and once at the 60 s mark before paying from its own payer, and
+creates a credential and sends `request` only when a probe lists a candidate.
+`discovery unavailable` ends the probing; a pinned pair with `discover:false`
+is never probed.
+
+What both sides need: `libp2p_module` created with `mountKad: true`,
+`mountServiceDiscovery: true` and `bootstrapNodes` naming reachable DHT peers
+(the delivery module merges the deployment's DHT bootstrap peers — the
+preset's and the configuration's `kadBootstrapNodes` — with
+`LIBP2P_MODULE_CONFIG`'s own). An allocator registers its advertisement with
+the peers in its routing table at serve time, which is why `serve` waits for
+a connected peer first; a placement made before any peer appears is repeated
+by the worker once one does. A node without discovery mounted serves
+unadvertised (`advertiseError`) and a client there reports
+`discovery unavailable` and goes on to the configured pair. Both the
+allocator's data and a record's data are plain text on the module wire;
+lookups return the data base64-encoded.
 
 Not implemented: a client-side list of pinned gifters (one configured pair
 per call), and retrying a candidate that read the request.
@@ -557,7 +616,7 @@ parsing at `rust-lib/src/lib.rs:660-739`):
 | key | value | notes |
 |---|---|---|
 | `delegated` | `"true"` (exact string) | selects the allocation protocol (`flat_bool_option`, `lib.rs:379`) |
-| `discover` | `"true"` (default) / `"false"` | ask the allocators advertising the (registry, auth_type) pair first (§2.5); `"false"` dials the configured pair alone (0.15.0) |
+| `discover` | `"true"` (default) / `"false"` | ask the allocators advertising the (registry, auth_type) pair first (§2.5); `"false"` dials the configured pair alone (0.15.0). Provisioning probes a discovery miss again (§2.5); a pinned pair with `"false"` is never probed |
 | `gifter_peer_id` | PeerId | together with `gifter_multiaddr`, or neither; asked after the discovered ones. Required when `discover` is `"false"` |
 | `gifter_multiaddr` | multiaddr without `/p2p/` | see `gifter_peer_id` |
 | `auth_type` | vector name | optional; omitted = unauthenticated request for an open gifter |
@@ -577,7 +636,7 @@ through its generated client with a 340 s budget (`provider.rs`).
 |---|---|
 | `liblogos_rln_module` | mints the identity, holds the keystore, owns the membership record and the confirmation poller |
 | `rln_gifter_module` | client half (`request`) |
-| `libp2p_module` | the client's own node; `createNode {"addrs":["/ip4/127.0.0.1/tcp/0"], "mountServiceDiscovery": true, "bootstrapNodes": [...]}` + `start` to discover allocators (§2.5); without discovery, the configured pair alone (`consumer-gifter/run.sh:165-167`; UI: `membership.js:74-87`) |
+| `libp2p_module` | the client's own node; `createNode {"addrs":["/ip4/127.0.0.1/tcp/0"], "mountKad": true, "mountServiceDiscovery": true, "bootstrapNodes": [...]}` + `start` to discover allocators (§2.5); without discovery, the configured pair alone (`consumer-gifter/run.sh:165-167`; UI: `membership.js:74-87`) |
 | `liblogos_lez_rln_module` | **read-only** chain access for the poller (`get_membership`, roots). Its wallet is never funded (`consumer-gifter/run.sh:10-12, 153-160`) |
 | producer module (e.g. `keycard_capture_module`) | only if the vector needs one |
 
@@ -849,12 +908,18 @@ Operator side:
    sized from the fee reserve (§3.3). Keep it synced for the daemon's lifetime.
 5. **Bring up libp2p**: `createNode {"privKey": <hex>, "addrs":
    ["/ip4/<routable-ip>/tcp/<port>"], "mountGossipsub": false, "mountKad":
-   false, "mountServiceDiscovery": false, "maxConnsPerPeer": 1, …}`; `start`;
-   `peerInfo` → **publish `peerId` and the dial multiaddr to your users**.
+   true, "mountServiceDiscovery": true, "bootstrapNodes": [{"peerId": …,
+   "addrs": […]}, …], "maxConnsPerPeer": 1, …}` (`bootstrapNodes` from
+   `KAD_BOOTSTRAP_NODES`; empty leaves the allocator reachable by pinned peer
+   id only); `start`; `peerInfo` → **publish `peerId` and the dial multiaddr
+   to your users**.
 6. **Serve**: `rln_gifter_module serve {"config": "<registry config
    account>", "wallet": "<payer>", "authVerifiers": {"<type>": {"module":
    "<verifier>", "config": {…}}}, "consumedNullifiersPath": "<persistent
-   file>", "maxRateLimit": 100}`. Repeat after every restart.
+   file>", "maxRateLimit": 100, "advertise": true, "advertiseAddrs":
+   ["/ip4/<routable-ip>/tcp/<port>"]}`. The reply's `advertisedToPeers` is the
+   number of DHT peers the advertisement was placed with. Repeat after every
+   restart.
 
 User side (inside the app, after loading §5.2's modules and starting its own
 libp2p node):

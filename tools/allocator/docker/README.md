@@ -26,7 +26,7 @@ image there and a linux-arm64 image on an Apple-silicon Mac.
 | `Dockerfile` | released `logosctl` 0.3.0 + catalog `libp2p_module` 1.1.0 and `liblogos_lez_rln_module` 5.1.0 + `bundles/*.lgx`, installed into a read-only `modules_dir` |
 | `entrypoint.sh`, `lib-ctl.sh` | daemon → modules → persisted node key → publish → wallet → serve → supervise |
 | `compose.yml` | the service: data volume, port, `host.docker.internal` for the node API, restart policy, capped logs |
-| `allocator.env.example` | every knob (incl. `KEYCARD_TRUSTED_CAS`, `ADVERTISE_PORT`, `ALT_MULTIADDRS`); copy to `allocator.env` |
+| `allocator.env.example` | every knob (incl. `KEYCARD_TRUSTED_CAS`, `ADVERTISE_PORT`, `ALT_MULTIADDRS`, `KAD_BOOTSTRAP_NODES`); copy to `allocator.env` |
 | `config/allowlist.txt` | eth-allowlist, one address per line (40 hex, `0x` optional, any case; copy `config/allowlist.txt.example`; the live file is git-ignored); editable while running — the `config/` directory is bind-mounted, so any editor's save is seen |
 | `config/allowlist-logos.txt`, `config/allowlist-lez.txt` | logos-allowlist (64-hex public keys, canonical little-endian) and lez-allowlist (64-hex or base58 account ids; the entrypoint decodes base58 and keeps only 32-byte ids), one per line (copy the `*.txt.example`; live files git-ignored); same bind-mount and re-serve behaviour; bad lines are dropped with a log line; `LOGOS_ALLOWLIST=0` / `LEZ_ALLOWLIST=0` turn a vector off; `LOGOS_AUDIENCE` / `LEZ_AUDIENCE` set the verifiers' `audience`. Spec: `docs/auth-allowlists.md` |
 | `node/` (`compose.yml`, `node.env.example`, `run-node.sh`) | a FOLLOWER logos-blockchain node on the testers' chain, API on the host loopback: the node the pow-claim verifier reads (§7) |
@@ -312,8 +312,16 @@ Options:
 ```sh
 ADVERTISE_IP=<stable ip>               # gifter_multiaddr
 ADVERTISE_PORT=9000                    # the port testers dial
-ALT_MULTIADDRS=/ip4/<LAN ip>/tcp/9000  # optional, informational
+ALT_MULTIADDRS=/ip4/<LAN ip>/tcp/9000  # optional; also published in the DHT advertisement
+KAD_BOOTSTRAP_NODES=<multiaddr>/p2p/<peerId>,…   # DHT peers; empty = reachable by pinned peer id only
 ```
+
+With `KAD_BOOTSTRAP_NODES` set the entrypoint creates the libp2p node with
+`mountKad:true`, `mountServiceDiscovery:true` and those peers as
+`bootstrapNodes`, and `serve` gets `advertise:true` and
+`advertiseAddrs:[ADVERTISE_ADDR, ALT_MULTIADDRS…]`: a client finds the
+allocator by registry through the DHT and dials those addresses
+(`docs/running-an-allocator.md` §2.5).
 
 Then `docker compose up -d` (same PeerId). `ADVERTISE_PORT` defaults to 9000
 (set it to `HOST_PORT` when that differs). LAN testers can dial

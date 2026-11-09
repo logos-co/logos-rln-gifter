@@ -17,6 +17,9 @@ From their `allocator.json`:
   container (nim-libp2p's resolver does not read `/etc/hosts`).
 - `registry_id` — the registry the allocator pays on.
 
+An allocator that advertises through the DHT needs none of the first two:
+the client finds it from `registry_id` (discovery mode, §3).
+
 The operator fetches `allocator.json` with
 `docker compose exec allocator cat /var/lib/allocator/allocator.json` and
 hands it to you. It maps onto `client.env` as:
@@ -59,6 +62,20 @@ Each bundle must report the variant `linux-amd64` (Intel) — no `-dev`.
 cp client.env.example client.env
 $EDITOR client.env      # ALLOCATOR_PEER_ID and ALLOCATOR_MULTIADDR from step 0
 ```
+
+Two modes, chosen by `client.env`:
+
+- Pinned: `ALLOCATOR_PEER_ID` + `ALLOCATOR_MULTIADDR` name the allocator.
+- Discovery: `ALLOCATOR_PEER_ID` empty, `REGISTRY_CONFIG` set to the
+  registry's ConfigState account (hex or base58), and `KAD_BOOTSTRAP_NODES`
+  (comma-separated `<multiaddr>/p2p/<peerId>` DHT peers; `client.env.example`
+  lists the logos.test fleet entry nodes). The client's libp2p node is created
+  with `mountKad:true`, `mountServiceDiscovery:true` and those peers, waits up
+  to 20 s for a connected peer, and looks up an allocator advertising
+  `REGISTRY_CONFIG` for `CLIENT_AUTH_TYPE`. A miss reads
+  `discovery not joined: no connected peer after 20s` or
+  `no allocator advertises <registry>/<type>`, returned as the request's error.
+  `CLIENT_MODE=delivery` needs the pinned mode.
 
 ## 4. Run the probe
 
