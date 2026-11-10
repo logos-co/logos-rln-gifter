@@ -45,3 +45,6 @@ required-features = ["produce"]
 [[test]]
 name = "real_fixtures"
 required-features = ["produce"]
+
+[lints]
+workspace = true

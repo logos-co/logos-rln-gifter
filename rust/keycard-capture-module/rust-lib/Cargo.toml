@@ -17,3 +17,38 @@ keycard_client = { git = "https://github.com/logos-co/logos-rln-gifter", tag = "
 rln_auth_vector = { git = "https://github.com/logos-co/logos-rln-gifter", tag = "auth-crates-v0.3.1", package = "rln_auth_vector" }
 rln_auth_vectors = { git = "https://github.com/logos-co/logos-rln-gifter", tag = "auth-crates-v0.3.1", package = "rln_auth_vectors", default-features = false, features = ["keycard-pcsc"] }
 logos-rust-sdk = { path = "../logos-rust-sdk-src" }
+
+[lints.rust]
+unused_lifetimes = "warn"
+
+[lints.clippy]
+# Ownership and borrowing in signatures
+needless_pass_by_value = "warn"
+large_types_passed_by_value = "warn"
+trivially_copy_pass_by_ref = "warn"
+ref_option = "warn"
+ptr_arg = "warn"
+borrowed_box = "warn"
+# Clones and allocations
+implicit_clone = "warn"
+unnecessary_to_owned = "warn"
+iter_overeager_cloned = "warn"
+cloned_instead_of_copied = "warn"
+assigning_clones = "warn"
+clone_on_ref_ptr = "warn"
+# Smart pointers and shared state
+rc_buffer = "warn"
+rc_mutex = "warn"
+arc_with_non_send_sync = "warn"
+mutex_atomic = "warn"
+redundant_allocation = "warn"
+box_collection = "warn"
+unnecessary_box_returns = "warn"
+large_enum_variant = "warn"
+await_holding_lock = "warn"
+# Lifetimes
+needless_lifetimes = "warn"
+extra_unused_lifetimes = "warn"
+# Escape hatches stay documented
+undocumented_unsafe_blocks = "warn"
+allow_attributes_without_reason = "warn"

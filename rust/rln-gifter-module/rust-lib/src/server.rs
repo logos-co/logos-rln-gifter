@@ -1337,7 +1337,7 @@ mod tests {
         // once peers appear.
         reset_ads();
         let up = std::sync::Arc::new(AtomicBool::new(false));
-        let u = up.clone();
+        let u = std::sync::Arc::clone(&up);
         scripted_libp2p(move || usize::from(u.load(Ordering::SeqCst)));
         *lock(&WANTED_AD) = Some(spec);
         let mut reply = json!({});
@@ -1392,7 +1392,7 @@ mod tests {
         // Placed with no peer: the check is rate-limited, re-places on 0 → 1
         // and only then.
         let mut adv = place(None, 0);
-        let p = peers.clone();
+        let p = Arc::clone(&peers);
         scripted_libp2p(move || p.load(Ordering::SeqCst));
         lp::fake::advance(5);
         adv.tick().unwrap();

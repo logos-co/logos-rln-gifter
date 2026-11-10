@@ -1,0 +1,2 @@
+# Lints also fire on pub items; a change to a pub item of crates/* still needs a tag bump.
+avoid-breaking-exported-api = false

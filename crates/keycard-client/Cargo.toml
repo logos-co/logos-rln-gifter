@@ -13,3 +13,6 @@ k256 = { version = "0.13", features = ["ecdh"] }
 rand = "0.8"
 unicode-normalization = "0.1"
 hex = "0.4"
+
+[lints]
+workspace = true

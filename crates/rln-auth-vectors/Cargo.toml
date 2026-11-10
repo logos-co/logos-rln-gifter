@@ -27,3 +27,6 @@ base58 = "0.2"
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 k256 = { version = "0.13", features = ["ecdsa", "schnorr"] }
 rand_core = { version = "0.6", features = ["getrandom"], optional = true }
+
+[lints]
+workspace = true

@@ -30,3 +30,6 @@ blake2 = "0.10"
 [[test]]
 name = "real_fixture"
 required-features = ["verify"]
+
+[lints]
+workspace = true
