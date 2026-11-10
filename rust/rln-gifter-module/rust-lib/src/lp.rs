@@ -279,6 +279,52 @@ fn parse_ok(raw: &str) -> Value {
     }
 }
 
+/// Why a cross-module call returned no value, split by whether the target
+/// may have run it.
+pub(crate) enum CallError {
+    /// A definite outcome: the call was refused before dispatch, the protocol
+    /// reported that the target did not run it, or the target answered.
+    Failed(String),
+    /// No definite answer: the call may have reached the target and run (its
+    /// deadline elapsed, the transport failed mid-call, the reply never came).
+    Unanswered(String),
+}
+
+impl CallError {
+    pub(crate) fn into_message(self) -> String {
+        match self {
+            CallError::Failed(m) | CallError::Unanswered(m) => m,
+        }
+    }
+}
+
+/// Protocol error codes after which the target did not run the call: the
+/// argument checks of lp_invoke, and logos_call_error.h's unavailable target,
+/// undispatchable call and rejected token. Every other code ("timeout",
+/// "transport_error", one added later) leaves the outcome open.
+const NOT_RUN_CODES: [&str; 5] = [
+    "invalid_arg",
+    "invalid_args",
+    "object_unavailable",
+    "call_failed",
+    "unauthorized",
+];
+
+/// The `CallError` kind for the protocol's error payload
+/// `{"code","message","origin"}`; a payload without a known code is unanswered.
+fn kind_of(payload: &str) -> fn(String) -> CallError {
+    let not_run = serde_json::from_str::<Value>(payload).is_ok_and(|v| {
+        v.get("code")
+            .and_then(Value::as_str)
+            .is_some_and(|code| NOT_RUN_CODES.contains(&code))
+    });
+    if not_run {
+        CallError::Failed
+    } else {
+        CallError::Unanswered
+    }
+}
+
 /// One cross-module call: JSON-array args in, the reply value out. On the owner
 /// thread uses synchronous lp_invoke (its wait loop pumps the owner Qt loop);
 /// off it uses lp_invoke_async + a channel. `timeout_ms` is the explicit
@@ -289,13 +335,28 @@ pub fn call_json(
     args: &Value,
     timeout_ms: i32,
 ) -> Result<Value, String> {
+    call_json_classified(target, method, args, timeout_ms).map_err(CallError::into_message)
+}
+
+/// `call_json`, with the failure classified by whether the target may have
+/// run the call.
+pub(crate) fn call_json_classified(
+    target: &str,
+    method: &str,
+    args: &Value,
+    timeout_ms: i32,
+) -> Result<Value, CallError> {
+    // A scripted failure stands for the protocol's error payload.
     #[cfg(test)]
     if let Some(r) = fake::intercept(target, method, args) {
-        return r;
+        return r.map_err(|payload| kind_of(&payload)(payload));
     }
-    let client = client_ptr(target).ok_or_else(|| format!("no lp client for {target}"))?;
+    let client = client_ptr(target)
+        .ok_or_else(|| CallError::Failed(format!("no lp client for {target}")))?;
     let (Ok(method_c), Ok(args_c)) = (CString::new(method), CString::new(args.to_string())) else {
-        return Err(format!("{method}: args not CString-safe"));
+        return Err(CallError::Failed(format!(
+            "{method}: args not CString-safe"
+        )));
     };
 
     if on_owner_thread() {
@@ -316,20 +377,18 @@ pub fn call_json(
             )
         };
         if rc != ffi::LP_OK {
-            let msg = if error_json.is_null() {
-                format!("{method}: lp error {rc}")
-            } else {
-                // SAFETY: `error_json` is non-null, NUL-terminated and owned by this function
-                // until the `lp_string_free` below; it is copied out first.
-                let m = unsafe { CStr::from_ptr(error_json) }
-                    .to_string_lossy()
-                    .into_owned();
-                // SAFETY: `error_json` came from `lp_invoke`, is freed exactly once here and is
-                // not read afterwards (`m` is an owned copy).
-                unsafe { ffi::lp_string_free(error_json) };
-                m
-            };
-            return Err(msg);
+            if error_json.is_null() {
+                return Err(CallError::Unanswered(format!("{method}: lp error {rc}")));
+            }
+            // SAFETY: `error_json` is non-null, NUL-terminated and owned by this function
+            // until the `lp_string_free` below; it is copied out first.
+            let m = unsafe { CStr::from_ptr(error_json) }
+                .to_string_lossy()
+                .into_owned();
+            // SAFETY: `error_json` came from `lp_invoke`, is freed exactly once here and is
+            // not read afterwards (`m` is an owned copy).
+            unsafe { ffi::lp_string_free(error_json) };
+            return Err(kind_of(&m)(m));
         }
         let raw = if result_json.is_null() {
             String::new()
@@ -370,16 +429,18 @@ pub fn call_json(
         // and the callback is never invoked (logos_protocol.h, lp_invoke_async), so
         // `user_data` is still the box made above and nothing else frees it.
         drop(unsafe { Box::from_raw(user_data as *mut AsyncReply) });
-        return Err(format!("{method}: lp_invoke_async dispatch failed rc={rc}"));
+        return Err(CallError::Failed(format!(
+            "{method}: lp_invoke_async dispatch failed rc={rc}"
+        )));
     }
     // The protocol owns timeout enforcement; the margin only guards a callback
     // that never fires.
     let wait = Duration::from_millis(timeout_ms as u64 + 10_000);
     let (ok, raw) = rx
         .recv_timeout(wait)
-        .map_err(|_| format!("{method}: reply channel timed out"))?;
+        .map_err(|_| CallError::Unanswered(format!("{method}: reply channel timed out")))?;
     if !ok {
-        return Err(format!("{method}: {}", err_message(&raw)));
+        return Err(kind_of(&raw)(format!("{method}: {}", err_message(&raw))));
     }
     Ok(parse_ok(&raw))
 }
@@ -420,12 +481,22 @@ pub fn call_module_json(
     args: &Value,
     timeout_ms: i32,
 ) -> Result<Value, String> {
-    let v = call_json(target, method, args, timeout_ms)?;
+    call_module_json_classified(target, method, args, timeout_ms).map_err(CallError::into_message)
+}
+
+/// `call_module_json`, with the failure classified by whether the target may
+/// have run the call; a reply it cannot use is the target's answer.
+pub(crate) fn call_module_json_classified(
+    target: &str,
+    method: &str,
+    args: &Value,
+    timeout_ms: i32,
+) -> Result<Value, CallError> {
+    let v = call_json_classified(target, method, args, timeout_ms)?;
     match v {
-        Value::String(s) if !s.is_empty() => {
-            serde_json::from_str(&s).map_err(|e| format!("{method}: reply parse: {e}"))
-        }
-        Value::String(_) => Err(format!("{method}: empty reply")),
+        Value::String(s) if !s.is_empty() => serde_json::from_str(&s)
+            .map_err(|e| CallError::Failed(format!("{method}: reply parse: {e}"))),
+        Value::String(_) => Err(CallError::Failed(format!("{method}: empty reply"))),
         other => Ok(other),
     }
 }

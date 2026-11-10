@@ -830,7 +830,8 @@ fn handle_request(buf: &[u8], peer_id: Option<&str>) -> RlnGifterResponse {
 }
 
 /// Why a gift was not delivered: before anything was submitted, or after a
-/// submission the registry did not confirm in time.
+/// submission (made, or asked for with no answer) the registry did not
+/// confirm in time.
 enum RegisterError {
     NotSubmitted(String),
     Unconfirmed(String),
@@ -901,13 +902,20 @@ fn register(
     rate: u64,
 ) -> Result<MembershipAllocationSuccess, RegisterError> {
     let idc_hex = hex::encode(id_commitment);
-    let reply = lp::call_module_json(
+    let reply = lp::call_module_json_classified(
         lp::LEZ_RLN_MODULE,
         "register_member",
         &json!([registry, cfg.wallet, idc_hex, rate]),
         REGISTER_TIMEOUT_MS,
     )
-    .map_err(RegisterError::NotSubmitted)?;
+    .map_err(|e| match e {
+        // The registry module never ran the call, or answered it.
+        lp::CallError::Failed(m) => RegisterError::NotSubmitted(m),
+        // No answer: the registry module may have accepted the transaction.
+        lp::CallError::Unanswered(m) => {
+            RegisterError::Unconfirmed(format!("{m}; it may still land"))
+        }
+    })?;
     // liblogos_lez_rln_module answers {"error":…} for a registration its
     // program would reject (a commitment that is not a field element, a full
     // registry, a payer that cannot pay) and for a send the sequencer did not
@@ -1665,5 +1673,106 @@ mod tests {
         reset_ads();
         let _ = std::fs::remove_file(&old);
         let _ = std::fs::remove_file(&new);
+    }
+
+    /// The protocol's error payload for a call to the registry module.
+    fn lez_call_error(code: &str, message: &str) -> String {
+        json!({ "code": code, "message": message, "origin": lp::LEZ_RLN_MODULE }).to_string()
+    }
+
+    const REGISTER_TIMED_OUT: &str =
+        "call to 'liblogos_lez_rln_module.register_member' timed out after 190000ms";
+    const LEZ_NOT_LOADED: &str = "replica for 'liblogos_lez_rln_module' is gone";
+
+    // register_member's deadline elapses with no reply: the registry module
+    // may have accepted the transaction, so the credential stays spent, in
+    // the file and in memory, and the requester learns it may still land.
+    #[test]
+    fn a_register_member_timeout_keeps_the_reservation() {
+        let _g = lock(&AD_STATE);
+        reset_ads();
+        let store = tmp("register-timeout");
+        lp::fake::install(Box::new(|_, method, _| match method {
+            rln_auth_vector::VERIFY_METHOD => Ok(json!({ "ok": true, "nullifier": "cc" })),
+            "register_member" => Err(lez_call_error("timeout", REGISTER_TIMED_OUT)),
+            "get_membership" => Ok(json!({ "registered": false })),
+            "mountProtocol" => Err("refused in test".into()),
+            m => Err(format!("unscripted {m}")),
+        }));
+        assert_eq!(
+            serve(&vector_serve(&store)).unwrap_err(),
+            "mountProtocol: refused in test"
+        );
+
+        let resp = handle_request(&vector_request("r4").encode(), Some("peer"));
+        let nul = rln_auth_vector::namespaced_nullifier(&acct(0xd), "t", "cc");
+        assert!(
+            auth::load_nullifiers(&store).unwrap().contains(&nul),
+            "the reservation stays in the store file"
+        );
+        assert!(resp.auth_success);
+        assert_eq!(
+            failure_text(&resp),
+            format!(
+                "{}{}; it may still land",
+                crate::wire::UNCONFIRMED_PREFIX,
+                lez_call_error("timeout", REGISTER_TIMED_OUT)
+            )
+        );
+        // Kept in memory too: a retry finds the credential spent and submits
+        // nothing.
+        let resp = handle_request(&vector_request("r5").encode(), Some("peer"));
+        assert_eq!(
+            failure_text(&resp),
+            format!("credential already used: {nul}")
+        );
+        let registers = lp::fake::methods()
+            .into_iter()
+            .filter(|m| m == "register_member")
+            .count();
+        assert_eq!(registers, 1);
+
+        *lock(&SERVER) = None;
+        lp::fake::clear();
+        reset_ads();
+        let _ = std::fs::remove_file(&store);
+    }
+
+    // The protocol reports that the registry module never ran
+    // register_member (it is not loaded): nothing can land, so the
+    // credential is released, in the file and in memory.
+    #[test]
+    fn a_register_member_call_the_module_never_ran_releases_the_reservation() {
+        let _g = lock(&AD_STATE);
+        reset_ads();
+        let store = tmp("register-not-run");
+        lp::fake::install(Box::new(|_, method, _| match method {
+            rln_auth_vector::VERIFY_METHOD => Ok(json!({ "ok": true, "nullifier": "dd" })),
+            "register_member" => Err(lez_call_error("object_unavailable", LEZ_NOT_LOADED)),
+            "mountProtocol" => Err("refused in test".into()),
+            m => Err(format!("unscripted {m}")),
+        }));
+        assert_eq!(
+            serve(&vector_serve(&store)).unwrap_err(),
+            "mountProtocol: refused in test"
+        );
+
+        let refused = format!(
+            "{}{}",
+            crate::wire::NOT_SUBMITTED_PREFIX,
+            lez_call_error("object_unavailable", LEZ_NOT_LOADED)
+        );
+        let resp = handle_request(&vector_request("r6").encode(), Some("peer"));
+        assert_eq!(failure_text(&resp), refused);
+        let nul = rln_auth_vector::namespaced_nullifier(&acct(0xd), "t", "dd");
+        assert!(!auth::load_nullifiers(&store).unwrap().contains(&nul));
+        // Released in memory too: a retry reserves the credential again.
+        let resp = handle_request(&vector_request("r7").encode(), Some("peer"));
+        assert_eq!(failure_text(&resp), refused);
+
+        *lock(&SERVER) = None;
+        lp::fake::clear();
+        reset_ads();
+        let _ = std::fs::remove_file(&store);
     }
 }
