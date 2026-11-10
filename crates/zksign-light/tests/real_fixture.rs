@@ -119,3 +119,36 @@ fn zero_pk_le_is_canonical_and_stable() {
     assert!(!zksign_light::is_canonical_fr(&[0xff; 32]));
     assert_eq!(z, zero_pk_le());
 }
+
+#[test]
+fn vk_cache_reuses_a_prepared_vk_until_the_file_changes() {
+    use std::sync::Arc;
+    use zksign_light::verify::vk_from_path_cached;
+
+    let dir = std::env::temp_dir().join(format!("zksign-vk-cache-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("vk.json");
+    let path_str = path.to_str().unwrap();
+    std::fs::write(&path, DEFAULT_VK_JSON).unwrap();
+
+    let first = vk_from_path_cached(path_str).unwrap();
+    let hit = vk_from_path_cached(path_str).unwrap();
+    assert!(
+        Arc::ptr_eq(&first, &hit),
+        "unchanged file must hit the cache"
+    );
+
+    // Trailing whitespace keeps the JSON valid and changes the length (part of the key).
+    std::fs::write(&path, format!("{DEFAULT_VK_JSON}\n\n")).unwrap();
+    let second = vk_from_path_cached(path_str).unwrap();
+    assert!(
+        !Arc::ptr_eq(&first, &second),
+        "a changed file must yield a new handle"
+    );
+
+    // The evicted handle stays usable.
+    let f = fixture();
+    verify_sig(first.as_ref(), &f.k, &f.digest, &f.zksig).unwrap();
+    verify_sig(second.as_ref(), &f.k, &f.digest, &f.zksig).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+}

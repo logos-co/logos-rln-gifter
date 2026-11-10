@@ -72,7 +72,7 @@ fn append_padding(data: &[u8]) -> Vec<u8> {
     out
 }
 
-fn remove_padding(data: &[u8]) -> Vec<u8> {
+fn remove_padding(mut data: Vec<u8>) -> Vec<u8> {
     let mut i = data.len();
     while i > 0 {
         i -= 1;
@@ -80,7 +80,8 @@ fn remove_padding(data: &[u8]) -> Vec<u8> {
             break;
         }
     }
-    data[..i].to_vec()
+    data.truncate(i);
+    data
 }
 
 fn xor16(a: &[u8], b: &[u8]) -> [u8; 16] {
@@ -131,7 +132,7 @@ pub fn encrypt_data(data: &[u8], enc_key: &[u8], iv: &[u8]) -> Vec<u8> {
 pub fn decrypt_data(data: &[u8], enc_key: &[u8], iv: &[u8]) -> Vec<u8> {
     let cipher = Aes256::new_from_slice(enc_key)
         .expect("invariant: secure-channel keys are 32 bytes (derive_session_keys)");
-    remove_padding(&cbc_decrypt_raw(&cipher, iv, data))
+    remove_padding(cbc_decrypt_raw(&cipher, iv, data))
 }
 
 pub fn calculate_mac(meta: &[u8; 16], data: &[u8], mac_key: &[u8]) -> [u8; 16] {

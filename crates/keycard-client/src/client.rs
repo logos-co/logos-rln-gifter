@@ -269,7 +269,7 @@ impl Keycard {
             return Err(format!("EXPORT_KEY SW {:04X}", resp.sw));
         }
         let tpl = find_tag(&resp.data, 0xA1).ok_or("no A1 export template")?;
-        find_tag(&tpl, 0x81).ok_or("no private key in export".into())
+        find_tag(&tpl, 0x81).ok_or_else(|| "no private key in export".into())
     }
 
     pub fn identify(&mut self, challenge: &[u8]) -> Result<Vec<u8>, String> {
