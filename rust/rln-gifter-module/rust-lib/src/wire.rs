@@ -116,7 +116,6 @@ const BN254_R_BE: [u8; 32] = [
 /// gifter check before any verifier call or chain round-trip. The strings
 /// mirror the lez module's kind so a caller can match `invalid_commitment`
 /// whichever side refused.
-// OWNERSHIP: every refusal is a string literal.
 pub fn commitment_refusal(bytes: &[u8]) -> Option<&'static str> {
     if bytes.len() != 32 {
         return Some("identity_commitment must be 32 bytes");
@@ -218,9 +217,7 @@ fn read_varint(buf: &[u8], i: &mut usize) -> Option<u64> {
     }
 }
 
-// OWNERSHIP: a view into the frame being walked (a u64 or a borrowed slice).
-// Copy because the field readers only read it: taking it by value is then
-// lint-clean (clippy::needless_pass_by_value) and callers need no borrow.
+// Copy: the field readers take it by value (clippy::needless_pass_by_value otherwise).
 #[derive(Clone, Copy)]
 enum FieldVal<'a> {
     Varint(u64),
@@ -230,7 +227,6 @@ enum FieldVal<'a> {
 // Walks length-delimited (wire 2) and varint (wire 0) fields — the only two the
 // gifter schema uses. `f` receives each (field_number, value); a malformed frame
 // returns Err.
-// OWNERSHIP: each value `f` receives borrows `buf`.
 fn walk_fields<'a, F: FnMut(u64, FieldVal<'a>)>(buf: &'a [u8], mut f: F) -> Result<(), String> {
     let mut i = 0usize;
     while i < buf.len() {
@@ -265,8 +261,6 @@ fn as_slice(v: FieldVal<'_>) -> &[u8] {
 }
 
 fn as_bytes(v: FieldVal) -> Vec<u8> {
-    // OWNERSHIP: decoded messages own their fields; the frame is the
-    // caller's buffer.
     as_slice(v).to_vec()
 }
 

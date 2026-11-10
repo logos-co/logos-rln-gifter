@@ -132,7 +132,10 @@ mod ffi {
 }
 
 struct ClientHandle(*mut ffi::LpClient);
-// Used per the owner-thread contract; the handle itself is read from any thread.
+// SAFETY: the wrapped `lp_client*` is never destroyed (nothing in this crate
+// calls `lp_client_destroy`), so it is valid for the rest of the process, and
+// logos_protocol.h makes handles thread-safe per handle ("calls on one handle
+// may be made from any thread"). Moving it to the serve worker is sound.
 unsafe impl Send for ClientHandle {}
 
 // OWNERSHIP: process-lifetime client table: written on the owner thread, read
@@ -147,11 +150,15 @@ pub(crate) fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 // Create a client on the owner thread (MUST run there — async replies are
-// delivered from the owner's pump). Idempotent per target.
+// delivered from the owner's pump). Not idempotent: callers check `cached_client`
+// first (a second insert would drop the first handle without destroying its client).
 fn create_client(target: &str) -> bool {
     let (Ok(t), Ok(o)) = (CString::new(target), CString::new("core")) else {
         return false;
     };
+    // SAFETY: `t` and `o` are NUL-terminated and outlive the call, which borrows
+    // its `const char*` inputs only for its duration; NULL transports select the
+    // process default. The handle is null-checked below and never destroyed.
     let raw = unsafe {
         ffi::lp_client_create(t.as_ptr(), o.as_ptr(), std::ptr::null(), std::ptr::null())
     };
@@ -236,10 +243,20 @@ extern "C" fn reply_trampoline(ok: c_int, json: *const c_char, user_data: *mut c
     if user_data.is_null() {
         return;
     }
+    // SAFETY: this trampoline is only passed to `lp_invoke_async` in `call_json`,
+    // with `user_data` from `Box::into_raw(Box<AsyncReply>)`. The protocol calls it
+    // exactly once per call that returned LP_OK and never for a refused one (which
+    // `call_json` reclaims itself), and no client is ever destroyed, so this is the
+    // only reclaim of a live box. `AsyncReply` holds only an `mpsc::Sender` (Send),
+    // so dropping it on the protocol's thread is sound; if the caller already timed
+    // out, only the `send` below fails.
     let reply = unsafe { Box::from_raw(user_data as *mut AsyncReply) };
     let raw = if json.is_null() {
         String::new()
     } else {
+        // SAFETY: `json` is non-null (checked above) and, per `lp_result_cb`, a
+        // NUL-terminated string valid for the duration of this callback; it is copied
+        // out before the callback returns.
         unsafe { CStr::from_ptr(json) }
             .to_string_lossy()
             .into_owned()
@@ -284,6 +301,10 @@ pub fn call_json(
     if on_owner_thread() {
         let mut result_json: *mut c_char = std::ptr::null_mut();
         let mut error_json: *mut c_char = std::ptr::null_mut();
+        // SAFETY: `client` is a CLIENTS handle, never destroyed; `method_c` and `args_c`
+        // are NUL-terminated and outlive the call; both out-pointers point at locals
+        // initialised to null, which the library may set to strings this function then
+        // owns and frees below.
         let rc = unsafe {
             ffi::lp_invoke(
                 client,
@@ -298,9 +319,13 @@ pub fn call_json(
             let msg = if error_json.is_null() {
                 format!("{method}: lp error {rc}")
             } else {
+                // SAFETY: `error_json` is non-null, NUL-terminated and owned by this function
+                // until the `lp_string_free` below; it is copied out first.
                 let m = unsafe { CStr::from_ptr(error_json) }
                     .to_string_lossy()
                     .into_owned();
+                // SAFETY: `error_json` came from `lp_invoke`, is freed exactly once here and is
+                // not read afterwards (`m` is an owned copy).
                 unsafe { ffi::lp_string_free(error_json) };
                 m
             };
@@ -309,9 +334,13 @@ pub fn call_json(
         let raw = if result_json.is_null() {
             String::new()
         } else {
+            // SAFETY: `result_json` is non-null, NUL-terminated and owned by this function
+            // until the `lp_string_free` below; it is copied out first.
             let s = unsafe { CStr::from_ptr(result_json) }
                 .to_string_lossy()
                 .into_owned();
+            // SAFETY: `result_json` came from `lp_invoke`, is freed exactly once here and
+            // is not read afterwards (`s` is an owned copy).
             unsafe { ffi::lp_string_free(result_json) };
             s
         };
@@ -322,6 +351,10 @@ pub fn call_json(
     // OWNERSHIP: the reply box belongs to the host until reply_trampoline
     // reclaims it; a refused dispatch reclaims it below.
     let user_data = Box::into_raw(Box::new(AsyncReply { tx })) as *mut c_void;
+    // SAFETY: `client` is a never-destroyed CLIENTS handle and `lp_invoke_async`
+    // may be called from any thread; `method_c` and `args_c` are NUL-terminated and
+    // outlive the call. On LP_OK `user_data` belongs to the protocol until
+    // `reply_trampoline` reclaims it; otherwise it is still ours (see below).
     let rc = unsafe {
         ffi::lp_invoke_async(
             client,
@@ -333,6 +366,9 @@ pub fn call_json(
         )
     };
     if rc != ffi::LP_OK {
+        // SAFETY: a return other than LP_OK means the call was refused before dispatch
+        // and the callback is never invoked (logos_protocol.h, lp_invoke_async), so
+        // `user_data` is still the box made above and nothing else frees it.
         drop(unsafe { Box::from_raw(user_data as *mut AsyncReply) });
         return Err(format!("{method}: lp_invoke_async dispatch failed rc={rc}"));
     }

@@ -228,8 +228,6 @@ fn blob(v: &Value) -> Value {
 
 /// The (registry, auth type) pairs a configuration serves, in the order
 /// `serve` lists its registries; an open allocator serves the empty type.
-// OWNERSHIP: the pairs borrow the registry list and the verifier map, which
-// outlive the advertisement data built from them.
 fn served_pairs<'a>(
     served: &'a [String],
     auth_verifiers: &'a HashMap<String, (String, Option<Value>)>,
@@ -450,7 +448,6 @@ pub fn serve(state: &mut ServeState, args_json: &str) -> Result<Value, String> {
     lock(&NULLIFIERS)
         .open(nullifiers_path)
         .map_err(|e| format!("nullifier store: {e}"))?;
-    // OWNERSHIP: shared by every request that starts under this config.
     *lock(&SERVER) = Some(Arc::new(ServerCfg {
         default_config,
         registries,
@@ -500,8 +497,6 @@ pub fn serve(state: &mut ServeState, args_json: &str) -> Result<Value, String> {
     // Spawn the serialized worker exactly once, after the advertisement and
     // the mount: from here on libp2p_module answers only it.
     if let Some(advertiser) = state.advertiser.take() {
-        // OWNERSHIP: the worker thread takes the advertiser by value (a
-        // 'static spawn) and is its only owner from here on.
         std::thread::spawn(move || worker_loop(advertiser));
     }
     Ok(reply)
@@ -644,7 +639,6 @@ fn handle_request(buf: &[u8], peer_id: Option<&str>) -> RlnGifterResponse {
         );
     }
 
-    // OWNERSHIP: cheap Arc handle; a request keeps the config it started with.
     let Some(cfg) = lock(&SERVER).as_ref().map(Arc::clone) else {
         return failure_response(
             req.request_id,

@@ -36,8 +36,6 @@ impl NullifierStore {
             append_missing(path, &self.spent)?;
         }
         if self.path.as_deref() != Some(path) {
-            // OWNERSHIP: the store keeps its own copy of the path `serve`
-            // borrows from its args.
             self.path = Some(path.to_owned());
         }
         Ok(())

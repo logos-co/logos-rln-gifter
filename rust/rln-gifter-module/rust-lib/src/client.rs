@@ -244,8 +244,7 @@ fn ask<A: AsRef<str>>(
     request_b64: &str,
 ) -> Result<Value, (Attempt, bool)> {
     let unreplied = |a: Attempt| (a, false);
-    // The addresses are written into the placeholder straight from the
-    // caller's slice, which keeps the key order of the literal.
+    // `multiaddrs` is filled straight from the caller's slice, without an intermediate Vec.
     let mut pr_args = json!({
         "peerId": peer_id,
         "multiaddrs": null,
