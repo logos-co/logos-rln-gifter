@@ -301,7 +301,12 @@ impl CallError {
 /// Protocol error codes after which the target did not run the call: the
 /// argument checks of lp_invoke, and logos_call_error.h's unavailable target,
 /// undispatchable call and rejected token. Every other code ("timeout",
-/// "transport_error", one added later) leaves the outcome open.
+/// "transport_error") leaves the outcome open. logos-protocol 0.9
+/// (`callErrorFromWire`, logos_call_error.h) maps any wire code it does not
+/// recognise to "call_failed", and "call_failed" is listed here because its only
+/// source is a method that could not be invoked; the list therefore depends on
+/// the 0.9 and later error vocabulary and must be re-checked when the protocol
+/// version changes.
 const NOT_RUN_CODES: [&str; 5] = [
     "invalid_arg",
     "invalid_args",
@@ -647,5 +652,56 @@ pub(crate) mod fake {
             }
         });
         Some(r)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn is_failed(e: &CallError) -> bool {
+        matches!(e, CallError::Failed(_))
+    }
+
+    #[test]
+    fn kind_of_classifies_error_payloads() {
+        let coded = |code: &str| format!(r#"{{"code":"{code}","message":"m","origin":"o"}}"#);
+
+        for code in NOT_RUN_CODES {
+            let e = kind_of(&coded(code))("x".to_string());
+            assert!(is_failed(&e), "{code} must classify as Failed");
+        }
+
+        let unanswered = [
+            coded("timeout"),
+            coded("transport_error"),
+            coded("some_future_code"),
+            r#"{"message":"m","origin":"o"}"#.to_string(),
+            r#"{"code":7,"message":"m"}"#.to_string(),
+            "invalid_args".to_string(),
+            "not json at all".to_string(),
+            String::new(),
+        ];
+        for payload in &unanswered {
+            let e = kind_of(payload)("x".to_string());
+            assert!(!is_failed(&e), "{payload:?} must classify as Unanswered");
+        }
+
+        // The async path classifies the raw payload and surfaces the reformatted
+        // message; the kind comes from the payload, the text from `err_message`.
+        let method = "do_it";
+        let raw = coded("invalid_args");
+        let e = kind_of(&raw)(format!("{method}: {}", err_message(&raw)));
+        assert!(is_failed(&e));
+        assert_eq!(e.into_message(), "do_it: m");
+
+        let raw = coded("timeout");
+        let e = kind_of(&raw)(format!("{method}: {}", err_message(&raw)));
+        assert!(!is_failed(&e));
+        assert_eq!(e.into_message(), "do_it: m");
+
+        // Classifying the reformatted message instead would lose the code.
+        let reformatted = format!("{method}: {}", err_message(&coded("invalid_args")));
+        assert!(!is_failed(&kind_of(&reformatted)("x".to_string())));
     }
 }
