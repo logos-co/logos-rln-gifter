@@ -95,7 +95,6 @@ enum Kind {
     Lez,
 }
 
-// OWNERSHIP: file and scheme names are compile-time constants, returned without allocating.
 impl Kind {
     fn file(self) -> &'static str {
         match self {
@@ -238,6 +237,7 @@ impl KeyStore {
     /// The module key of `kind`: cached, else loaded from its key file, else
     /// freshly generated (and persisted when a path exists).
     fn module_key(&self, kind: Kind) -> Result<[u8; 32], String> {
+        // The slot stays locked through load-or-generate-persist, so a kind never gets two different keys.
         let mut slot = self.slot(kind).lock().unwrap_or_else(|p| p.into_inner());
         if let Some(k) = *slot {
             return Ok(k);
@@ -348,14 +348,12 @@ impl RlnSign {
     fn build(logos: LogosSigner) -> Self {
         let store = Arc::new(KeyStore::default());
         let registry = ProduceRegistry::new()
-            // OWNERSHIP: cheap Arc handle clone; each boxed key source owns a handle to the shared store.
             .signer(EthSigner(Box::new(ModuleKeySource {
-                store: store.clone(),
+                store: Arc::clone(&store),
                 kind: Kind::Eth,
             })))
-            // OWNERSHIP: cheap Arc handle clone, as above.
             .signer(LezSigner(Box::new(ModuleKeySource {
-                store: store.clone(),
+                store: Arc::clone(&store),
                 kind: Kind::Lez,
             })))
             .signer(logos)
@@ -389,7 +387,6 @@ impl RlnSign {
 
     /// The logos key `args` names: its `public_key`, else the node's single
     /// auto-claim target.
-    // OWNERSHIP: the source label is a compile-time constant (`resolve_key`'s return type).
     fn logos_key(&self, args: &NodeArgs) -> Result<(String, &'static str), String> {
         #[cfg(test)]
         if let Some(n) = &self.test_node {
@@ -423,7 +420,7 @@ impl RlnSign {
         })
     }
 
-    fn identity_impl(&mut self, req_json: &str) -> Result<String, String> {
+    fn identity_impl(&self, req_json: &str) -> Result<String, String> {
         let (scheme, mut req) = parse_scheme_request(req_json, "identity")?;
         let mut out = match scheme.as_str() {
             "eth" => self.eth_identity(&self.store.module_key(Kind::Eth)?)?,
@@ -447,7 +444,7 @@ impl RlnSign {
         Ok(out.to_string())
     }
 
-    fn import_impl(&mut self, req_json: &str) -> Result<String, String> {
+    fn import_impl(&self, req_json: &str) -> Result<String, String> {
         let (scheme, req) = parse_scheme_request(req_json, "import_key")?;
         let kind = match scheme.as_str() {
             "eth" => Kind::Eth,
@@ -494,7 +491,6 @@ impl RlnSignModule for RlnSign {
     }
     fn on_context_ready(&mut self, ctx: &RustModuleContext) {
         // The generated host fires this hook at most once per process, so the path is written once.
-        // OWNERSHIP: `ctx` is borrowed from the host; the store keeps its own copy of the path.
         let _ = self
             .store
             .persistence_path
