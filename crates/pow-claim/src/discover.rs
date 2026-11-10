@@ -28,7 +28,6 @@ pub struct Found {
 
 fn candidate_keys(node: &dyn NodeApi, args: &ProduceArgs) -> Result<Vec<String>, String> {
     if let Some(k) = &args.claim_address {
-        // OWNERSHIP: `args` is borrowed; the key list is owned (node keys are built fresh).
         return Ok(vec![k.clone()]);
     }
     let st = node.pow_status()?;
@@ -123,7 +122,6 @@ pub fn discover(node: &dyn NodeApi, args: &ProduceArgs) -> Result<Found, String>
             .ok_or_else(|| format!("no PoWRewardClaimed with nullifier {nul} in block {bid}"))?;
         let (k, path) = owner(&ev, &block, &ks)
             .ok_or_else(|| format!("claim {nul} in block {bid} is not owned by any of {ks:?}"))?;
-        // OWNERSHIP: `bid` and `nul` borrow `args`; `Found` owns its copies.
         return Ok(Found {
             k,
             path,

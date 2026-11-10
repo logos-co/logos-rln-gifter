@@ -67,7 +67,6 @@ impl Authoriser for PowClaim {
                 .into(),
             ));
         }
-        // OWNERSHIP: `Claim` (pow-claim, public) owns its evidence; `ev` is borrowed from the flow.
         let claim = Claim {
             k,
             evidence: ev.clone(),

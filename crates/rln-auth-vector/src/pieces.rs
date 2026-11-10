@@ -40,7 +40,6 @@ pub trait Identity: Any + Send + Sync {
     fn as_any(&self) -> &dyn Any;
 }
 
-// OWNERSHIP: `downcast_ref` needs `T: Any`, which implies a static lifetime.
 pub fn downcast_identity<T: 'static>(id: &dyn Identity) -> Option<&T> {
     id.as_any().downcast_ref::<T>()
 }
@@ -69,7 +68,6 @@ pub struct Decoded<'a> {
 }
 
 /// How a binding digest gets signed, and which identity that proves.
-// OWNERSHIP: names are compile-time constants (static str); `decode` borrows the body it splits.
 pub trait Scheme: Send + Sync {
     fn name(&self) -> &'static str;
     /// What an identity of this scheme is called in reasons ("address",
@@ -104,7 +102,6 @@ pub trait Scheme: Send + Sync {
 
 /// The produce half of a scheme: holds (or reaches) the key. `args` is the
 /// request's opaque `args` (a key override, a node URL …).
-// OWNERSHIP: the scheme name is a compile-time constant (static str).
 pub trait Signer: Send + Sync {
     fn scheme(&self) -> &'static str;
     /// The scheme part for this binding and digest.
@@ -115,8 +112,6 @@ pub trait Signer: Send + Sync {
 }
 
 /// How an identity gets accepted, and what evidence that takes.
-// OWNERSHIP: the name is a compile-time constant (static str); `audience` borrows the config and
-// `decode_evidence` the bytes it splits.
 pub trait Authoriser: Send + Sync {
     fn name(&self) -> &'static str;
     /// Which schemes' identities this authoriser can judge.
@@ -143,7 +138,6 @@ pub trait Authoriser: Send + Sync {
 }
 
 /// The produce half of an authoriser: gathers the evidence to bind.
-// OWNERSHIP: the authoriser name is a compile-time constant (static str).
 pub trait Claimant: Send + Sync {
     fn authoriser(&self) -> &'static str;
     fn accepts(&self, scheme: &str) -> bool;

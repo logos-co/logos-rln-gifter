@@ -26,7 +26,6 @@ pub struct LezAccount(pub String);
 
 impl Identity for LezAccount {
     fn canonical(&self) -> String {
-        // OWNERSHIP: `canonical` returns an owned String (trait signature).
         self.0.clone()
     }
     fn as_any(&self) -> &dyn Any {

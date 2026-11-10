@@ -111,7 +111,6 @@ pub mod testing {
                 // OWNERSHIP: the block is served from two collections; each owns a copy.
                 self.immutable.push(block.clone());
             }
-            // OWNERSHIP: the id keys two maps.
             self.blocks.insert(id.clone(), block);
             self.events.insert(id, events);
         }

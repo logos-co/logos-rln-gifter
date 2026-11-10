@@ -72,13 +72,11 @@ pub fn vk_from_path_cached(path: &str) -> Result<Arc<PreparedVk>, String> {
     let key: VkKey = (path.to_string(), meta.modified().ok(), meta.len());
     let cache = CACHE.get_or_init(Default::default);
     if let Some(v) = cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key) {
-        // OWNERSHIP: cheap Arc handle clone.
         return Ok(Arc::clone(v));
     }
     let v = Arc::new(PreparedVk::from_path(path)?);
     let mut c = cache.lock().unwrap_or_else(|p| p.into_inner());
     c.retain(|(p, _, _), _| p != path);
-    // OWNERSHIP: cheap Arc handle clone; the cache and the caller each hold one.
     c.insert(key, Arc::clone(&v));
     drop(c);
     Ok(v)

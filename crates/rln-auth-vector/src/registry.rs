@@ -7,9 +7,9 @@ use crate::pieces::{Authoriser, Claimant, Scheme, Signer};
 use crate::reason;
 use crate::types::{error_reply, ProduceRequest, VerifyRequest};
 
-// OWNERSHIP: a heterogeneous plugin set, so boxed trait objects; the registry owns them for
-// the life of the module instance, and a borrowing registry would be self-referential
-// inside the module. A boxed `dyn Trait` has a static lifetime, hence the builders' static bound.
+// OWNERSHIP: an open, heterogeneous plugin set, so boxed trait objects the registry owns for
+// the life of the module instance. `Box<dyn Trait>` means `dyn Trait + 'static`: a piece holds
+// no borrows (what it borrowed would sit beside the registry in the module, a self-reference).
 #[derive(Default)]
 pub struct VerifyRegistry {
     schemes: Vec<Box<dyn Scheme>>,
@@ -74,9 +74,7 @@ impl VerifyRegistry {
     }
 }
 
-// OWNERSHIP: a heterogeneous plugin set, so boxed trait objects; the registry owns them for
-// the life of the module instance, and a borrowing registry would be self-referential
-// inside the module. A boxed `dyn Trait` has a static lifetime, hence the builders' static bound.
+// OWNERSHIP: as for `VerifyRegistry` above.
 #[derive(Default)]
 pub struct ProduceRegistry {
     signers: Vec<Box<dyn Signer>>,

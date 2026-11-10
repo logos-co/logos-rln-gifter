@@ -40,7 +40,6 @@ impl Default for Config {
     }
 }
 
-// OWNERSHIP: the result borrows `o`'s string; callers build the owned form they keep.
 fn opt_str<'a>(o: &'a Map<String, Value>, k: &str) -> Result<Option<&'a str>, String> {
     match o.get(k) {
         None | Some(Value::Null) => Ok(None),

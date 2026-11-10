@@ -72,8 +72,8 @@ impl LezKey {
     }
 }
 
-// OWNERSHIP: the module picks the key source (its key store, a static key); boxed because
-// the signer sits in a static-lifetime plugin registry.
+// OWNERSHIP: the module supplies and the signer owns the key source (its key store, a fixed key);
+// the registry needs it `'static`, so a module shares its store by `Arc`, not by borrow.
 pub struct LezSigner(pub Box<dyn KeySource>);
 
 impl LezSigner {
