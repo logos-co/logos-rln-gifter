@@ -1045,8 +1045,8 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "logos-blockchain-groth16"
-version = "0.3.0-rc.5"
-source = "git+https://github.com/logos-blockchain/logos-blockchain?rev=2c652646d74354b2877620bf0bc53b4c4d3f18e4#2c652646d74354b2877620bf0bc53b4c4d3f18e4"
+version = "0.3.5-rc.5"
+source = "git+https://github.com/logos-blockchain/logos-blockchain?rev=f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30#f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -1066,16 +1066,16 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-log-targets"
-version = "0.3.0-rc.5"
-source = "git+https://github.com/logos-blockchain/logos-blockchain?rev=2c652646d74354b2877620bf0bc53b4c4d3f18e4#2c652646d74354b2877620bf0bc53b4c4d3f18e4"
+version = "0.3.5-rc.5"
+source = "git+https://github.com/logos-blockchain/logos-blockchain?rev=f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30#f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30"
 dependencies = [
  "logos-blockchain-log-targets-macros",
 ]
 
 [[package]]
 name = "logos-blockchain-log-targets-macros"
-version = "0.3.0-rc.5"
-source = "git+https://github.com/logos-blockchain/logos-blockchain?rev=2c652646d74354b2877620bf0bc53b4c4d3f18e4#2c652646d74354b2877620bf0bc53b4c4d3f18e4"
+version = "0.3.5-rc.5"
+source = "git+https://github.com/logos-blockchain/logos-blockchain?rev=f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30#f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1084,8 +1084,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-poseidon2"
-version = "0.3.0-rc.5"
-source = "git+https://github.com/logos-blockchain/logos-blockchain?rev=2c652646d74354b2877620bf0bc53b4c4d3f18e4#2c652646d74354b2877620bf0bc53b4c4d3f18e4"
+version = "0.3.5-rc.5"
+source = "git+https://github.com/logos-blockchain/logos-blockchain?rev=f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30#f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30"
 dependencies = [
  "ark-bn254",
  "ark-ff",
@@ -1095,8 +1095,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-utils"
-version = "0.3.0-rc.5"
-source = "git+https://github.com/logos-blockchain/logos-blockchain?rev=2c652646d74354b2877620bf0bc53b4c4d3f18e4#2c652646d74354b2877620bf0bc53b4c4d3f18e4"
+version = "0.3.5-rc.5"
+source = "git+https://github.com/logos-blockchain/logos-blockchain?rev=f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30#f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30"
 dependencies = [
  "async-trait",
  "const-hex",
@@ -1217,7 +1217,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "overwatch"
 version = "0.2.0"
-source = "git+https://github.com/logos-co/Overwatch?rev=8f06c685948620d5d9931ed8f5bdb86e6cbffcd9#8f06c685948620d5d9931ed8f5bdb86e6cbffcd9"
+source = "git+https://github.com/logos-co/Overwatch?rev=fc71a844886f9fb8f382ecfadcebff455e33474b#fc71a844886f9fb8f382ecfadcebff455e33474b"
 dependencies = [
  "async-trait",
  "futures",

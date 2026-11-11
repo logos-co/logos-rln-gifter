@@ -19,8 +19,8 @@ rln_auth_vector = { path = "../rln-auth-vector" }
 serde_json = { version = "1", optional = true }
 ureq = { version = "2", default-features = false, optional = true }
 # Same rev for groth16 and poseidon2 (node 0.3.0-rc.5, circuits v0.5.7); ark 0.5 matches that workspace.
-logos-blockchain-groth16 = { git = "https://github.com/logos-blockchain/logos-blockchain", rev = "2c652646d74354b2877620bf0bc53b4c4d3f18e4", optional = true }
-logos-blockchain-poseidon2 = { git = "https://github.com/logos-blockchain/logos-blockchain", rev = "2c652646d74354b2877620bf0bc53b4c4d3f18e4", optional = true }
+logos-blockchain-groth16 = { git = "https://github.com/logos-blockchain/logos-blockchain", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30", optional = true }
+logos-blockchain-poseidon2 = { git = "https://github.com/logos-blockchain/logos-blockchain", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30", optional = true }
 ark-ff = { version = "0.5", default-features = false, optional = true }
 
 [dev-dependencies]
