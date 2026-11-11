@@ -63,7 +63,6 @@ struct ServerCfg {
     /// Every served registry (ConfigState account, lowercase) with its own
     /// rate cap; the default one included.
     registries: HashMap<String, RegistryCfg>,
-    wallet: String,
     /// Vector verifiers: authentication_type → (module, opaque per-vector
     /// config). Every vector — the reference keycard/eth modules included —
     /// is a plugin implementing the rln_auth_vector verifier contract; this
@@ -338,8 +337,10 @@ impl Advertiser {
 }
 
 /// Server entry point (the trait's `serve`): args
-/// `{config, wallet, registries?, authVerifiers?, consumedNullifiersPath?,
+/// `{config, registries?, authVerifiers?, consumedNullifiersPath?,
 ///  maxRateLimit?, advertise?, advertiseAddrs?}`.
+/// `wallet` is accepted and ignored: every registration is paid by the
+/// registry module's own payer (`REGISTRY_MODULE_PAYER`).
 /// `config` is the registry a request naming none is served on; `registries`
 /// adds further served ones (`"<config>"`, or `{"config", "maxRateLimit"?}`
 /// for a cap of its own) — a request names its registry on the wire and one
@@ -373,18 +374,22 @@ impl Advertiser {
 ///  serviceId?, serviceData?, advertisedToPeers?, advertiseError?}`.
 pub fn serve(state: &mut ServeState, args_json: &str) -> Result<Value, String> {
     let mut a: Value = serde_json::from_str(args_json).map_err(|e| format!("serve args: {e}"))?;
-    // Moved out of the parsed args before `config` borrows them, so the wallet
-    // and the verifier entries move into the stored config; the checks stay
-    // below, in their original order.
-    let wallet_arg = a.get_mut("wallet").map(Value::take);
+    // Moved out of the parsed args before `config` borrows them, so the
+    // verifier entries move into the stored config; the checks stay below, in
+    // their original order.
     let auth_verifiers_arg = a.get_mut("authVerifiers").map(Value::take);
     let config = a
         .get("config")
         .and_then(Value::as_str)
         .ok_or("missing config")?;
-    let Some(Value::String(wallet)) = wallet_arg else {
-        return Err("missing wallet".into());
-    };
+    if let Some(named) = a.get("wallet").and_then(Value::as_str) {
+        if !named.trim().is_empty() {
+            eprintln!(
+                "rln-gifter serve: wallet {named} is ignored — registrations are paid by the \
+                 registry module's own payer (fund the account its wallet_status reports)"
+            );
+        }
+    }
     let max_rate_limit = a
         .get("maxRateLimit")
         .and_then(Value::as_u64)
@@ -451,7 +456,6 @@ pub fn serve(state: &mut ServeState, args_json: &str) -> Result<Value, String> {
     *lock(&SERVER) = Some(Arc::new(ServerCfg {
         default_config,
         registries,
-        wallet,
         auth_verifiers,
     }));
 
@@ -789,7 +793,7 @@ fn handle_request(buf: &[u8], peer_id: Option<&str>) -> RlnGifterResponse {
         }
     }
 
-    match register(&cfg, &registry, &req.identity_commitment, rate) {
+    match register(&registry, &req.identity_commitment, rate) {
         Ok(success) => RlnGifterResponse {
             request_id: req.request_id,
             auth_success: true,
@@ -888,15 +892,20 @@ fn confirmed_leaf(reply: &Value) -> Option<u64> {
     reply.get("leaf_index").and_then(Value::as_u64)
 }
 
-// Delegate the on-chain registration to liblogos_lez_rln_module, paid by the
-// account `serve` was given as `wallet`, then wait until the registry shows
+/// The payer argument of `register_member` meaning "the registry module's own
+/// payer". That module reserves the fee from its own payer whatever account
+/// is named and preflights only the named one, so naming another account
+/// splits price and fee across two accounts with one of them unchecked.
+const REGISTRY_MODULE_PAYER: &str = "";
+
+// Delegate the on-chain registration to liblogos_lez_rln_module, paid by that
+// module's own payer, then wait until the registry shows
 // the membership. register_member answers when the transaction is accepted:
 // its leaf_index is only a pre-submit estimate (the tree assigns the leaf), and
 // a registration whose claims went stale is re-sent by that module under a new
 // transaction. So the leaf reported to the client is read back from the chain.
 // Runs on the serialized worker thread -> lp_invoke_async.
 fn register(
-    cfg: &ServerCfg,
     registry: &str,
     id_commitment: &[u8],
     rate: u64,
@@ -905,7 +914,7 @@ fn register(
     let reply = lp::call_module_json_classified(
         lp::LEZ_RLN_MODULE,
         "register_member",
-        &json!([registry, cfg.wallet, idc_hex, rate]),
+        &json!([registry, REGISTRY_MODULE_PAYER, idc_hex, rate]),
         REGISTER_TIMEOUT_MS,
     )
     .map_err(|e| match e {
@@ -1011,7 +1020,6 @@ mod tests {
         Arc::new(ServerCfg {
             default_config: served[0].clone(),
             registries,
-            wallet: String::new(),
             auth_verifiers: HashMap::new(),
         })
     }
@@ -1673,6 +1681,49 @@ mod tests {
         reset_ads();
         let _ = std::fs::remove_file(&old);
         let _ = std::fs::remove_file(&new);
+    }
+
+    // `serve` names a wallet; the registration still asks the registry
+    // module to pay from its own payer, the account its fee comes from.
+    #[test]
+    fn a_registration_is_paid_by_the_registry_modules_own_payer() {
+        let _g = lock(&AD_STATE);
+        reset_ads();
+        let store = tmp("module-payer");
+        lp::fake::install(Box::new(|_, method, _| match method {
+            rln_auth_vector::VERIFY_METHOD => Ok(json!({ "ok": true, "nullifier": "ee" })),
+            "register_member" => Ok(json!({ "leaf_index": 3 })),
+            "get_membership" => {
+                Ok(json!({ "registered": true, "state": "active", "leaf_index": 3 }))
+            }
+            "mountProtocol" => Err("refused in test".into()),
+            m => Err(format!("unscripted {m}")),
+        }));
+        assert_eq!(
+            serve(&vector_serve(&store)).unwrap_err(),
+            "mountProtocol: refused in test"
+        );
+
+        let resp = handle_request(&vector_request("r6").encode(), Some("peer"));
+        assert!(resp.success.is_some(), "{}", failure_text(&resp));
+        let payers: Vec<Value> = lp::fake::calls()
+            .into_iter()
+            .filter(|(m, _)| m == "register_member")
+            .map(|(_, mut args)| args[1].take())
+            .collect();
+        assert_eq!(payers, [json!("")]);
+
+        *lock(&SERVER) = None;
+        lp::fake::clear();
+        reset_ads();
+        let _ = std::fs::remove_file(&store);
+    }
+
+    // `wallet` is optional: a serve without it gets as far as one with it.
+    #[test]
+    fn serve_does_not_require_a_wallet() {
+        let e = serve(r#"{"config":"c"}"#).unwrap_err();
+        assert!(!e.contains("wallet"), "got: {e}");
     }
 
     /// The protocol's error payload for a call to the registry module.

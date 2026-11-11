@@ -93,7 +93,7 @@ must be called again, by whatever supervises the daemon.
 |---|---|---|---|
 | `config` | yes | — | the registry's ConfigState account (64-hex or base58; canonicalised to lowercase hex). The registry a request naming none is served on. |
 | `registries` | no | — | further served registries: `["<config>", {"config": "<config>", "maxRateLimit"?: N}]`; an entry without a cap takes the global one. A request names its registry on the wire (request field 100; the membership module sends its scope's); one not served is refused `registry not served: <cfg>` before any verifier runs (§3.1). The `serve` reply lists them. |
-| `wallet` | yes | — | the payer account id. Must be a key the registry module's wallet holds. `""` means "the registry module's own payer" (`liblogos_lez_rln_module.lidl:60-68`, `logos-rln-modules`). |
+| `wallet` | no | — | accepted and ignored (a non-empty value is logged). Every registration is paid, price and fee, by the registry module's own payer: the account `liblogos_lez_rln_module wallet_status` reports, set by `LEZ_RLN_PAYER` or derived. Fund that account. |
 | `authVerifiers` | no | absent = **open gifter** | `{"<auth_type>": {"module": "<logos module>", "config"?: {...}}}`. Present-but-malformed fails `serve` rather than degrading to open (`server.rs:85-106`). |
 | `consumedNullifiersPath` | no | `""` = replay protection in memory only | append-only file, one lowercase `<registry>:<type>:<nullifier>` per line (`auth.rs:10-41`); a credential buys one membership per registry. Without it a restart forgets every spent credential. |
 | `maxRateLimit` | no | `100` (`DEFAULT_MAX_RATE`, `server.rs:39`) | requests above it are clamped, silently. A request with no rate gets this value. Per registry when the `registries` entry sets its own. |
@@ -419,8 +419,10 @@ failure; it now pins the refusal.
 `register_member(config_account_id, payer_account_id, id_commitment_hex,
 rate_limit)` (`liblogos_lez_rln_module.lidl:60`). The payer "signs the tx,
 pays `rate_limit × price_per_unit` of NATIVE balance to the treasury, and pays
-the fee" (`lidl:20-27`). The gifter passes `serve`'s `wallet` as the payer
-(`server.rs:378-384`).
+the fee" (`lidl:20-27`). The gifter always passes `""`, the registry module's
+own payer (`server.rs` `REGISTRY_MODULE_PAYER`): the module reserves the fee
+from its own payer whatever account is named, so naming another one would
+split price and fee across two accounts.
 
 Nothing on chain records that a membership was gifted. `MembershipState` is
 `{rate_limit, id_commitment, grace_period_start_timestamp_ms,
@@ -667,7 +669,7 @@ Funded versus gifted:
 
 | | Funded (`delegated` absent) | Gifted |
 |---|---|---|
-| who signs and pays | the client's own `liblogos_lez_rln_module` payer (`provider.rs` `LezRlnProvider::register_async`) | the allocator's `wallet` |
+| who signs and pays | the client's own `liblogos_lez_rln_module` payer (`provider.rs` `LezRlnProvider::register_async`) | the allocator's registry-module payer |
 | what the client needs | a funded, synced wallet | a libp2p node with discovery, or a `(peer id, multiaddr)`, and optional auth material; chain read access |
 | identity, keystore, poller, confirmation | identical | identical |
 | automatic provisioning at `start()` | yes (`ensure.rs`, funded only) | **no** |
