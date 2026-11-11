@@ -15,8 +15,8 @@
 # modules_dir in a slim runtime image.
 
 FROM debian:trixie-slim AS builder
-ARG LOGOSCTL_VERSION=0.3.0
-ARG LIBP2P_VERSION=1.1.0
+ARG LOGOSCTL_VERSION=0.3.2
+ARG LIBP2P_VERSION=1.1.1
 ARG LEZ_RLN_VERSION=5.1.0
 # Delivery mode of the client (client-delivery.sh); the allocator never loads them.
 ARG RLN_VERSION=0.12.0
