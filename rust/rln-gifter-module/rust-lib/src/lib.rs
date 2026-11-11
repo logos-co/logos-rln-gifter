@@ -29,9 +29,11 @@ pub trait RlnGifterModule: Send + 'static {
     /// open allocator
     /// → `{leaf_index, id_commitment, auth_success, identity_adopted,
     ///  gifterPeerId, discovered, tx_hash?, config_account?}`.
-    /// A failure is `{error, gifterPeerId?, discovered?}`: the two keys name
-    /// the last allocator tried when its own reply refused (a refusal, a
-    /// registration not submitted or unconfirmed). Discovery outcomes inside
+    /// A failure is `{error, gifterPeerId?, discovered?, unconfirmed?}`: the
+    /// first two keys name the last allocator tried when its own reply
+    /// refused (a refusal, a registration not submitted or unconfirmed), and
+    /// `unconfirmed: true` says that allocator submitted the registration and
+    /// did not see it land in time, so it may still land. Discovery outcomes inside
     /// the error text: `discovery unavailable: <why>` (this node cannot
     /// discover: no discovery mounted, libp2p down), `discovery not joined:
     /// no connected peer after 20s` and `no allocator advertises
@@ -49,7 +51,7 @@ pub trait RlnGifterModule: Send + 'static {
     fn discover(&mut self, args_json: String) -> String;
     /// Allocator: mount the gifter protocol and serve inbound requests. Args
     /// `{config, wallet, registries?, authVerifiers?, consumedNullifiersPath?,
-    ///  maxRateLimit?, advertise?, advertiseAddrs?}` → `{mounted:true,
+    ///  maxRateLimit?, confirmBudgetSec?, advertise?, advertiseAddrs?}` → `{mounted:true,
     ///  registries, advertised, serviceId?, serviceData?, advertisedToPeers?,
     ///  advertisePending?, advertiseError?}`.
     /// authVerifiers maps each accepted authentication_type to its verifier
@@ -64,7 +66,10 @@ pub trait RlnGifterModule: Send + 'static {
     /// advertises a record signed for those addresses instead of the listen
     /// addresses. The advertisement is placed at once; advertisedToPeers is
     /// the outbound peer count then, and one placed with none is re-placed
-    /// once outbound peers appear.
+    /// once outbound peers appear. confirmBudgetSec (default 150) is how long
+    /// a submitted registration may take to show on chain before the request
+    /// is answered `unconfirmed: …`; the client waits 190 s for the whole
+    /// exchange, so a much larger budget outlives it.
     fn serve(&mut self, args_json: String) -> String;
     /// Relay an arbitrary libp2p_module call so the UI can read its return value
     /// (a C++ LogosResult marshals to null through the QML bridge; a module-to-

@@ -183,11 +183,14 @@ pub fn discover(args_json: &str) -> Result<Value, String> {
 }
 
 /// A failed `request`: the error text and, when an allocator's own reply
-/// ended it, that allocator and whether discovery found it.
+/// ended it, that allocator and whether discovery found it. `unconfirmed`
+/// says that reply was `unconfirmed: …`: the allocator submitted the
+/// registration and did not see it land in time, so it may still land.
 #[derive(Debug)]
 pub(crate) struct Failure {
     pub(crate) error: String,
     pub(crate) gifter: Option<(String, bool)>,
+    pub(crate) unconfirmed: bool,
 }
 
 impl Failure {
@@ -196,6 +199,9 @@ impl Failure {
         if let Some((peer, discovered)) = &self.gifter {
             out["gifterPeerId"] = json!(peer);
             out["discovered"] = json!(discovered);
+        }
+        if self.unconfirmed {
+            out["unconfirmed"] = json!(true);
         }
         out
     }
@@ -206,6 +212,7 @@ impl From<String> for Failure {
         Failure {
             error,
             gifter: None,
+            unconfirmed: false,
         }
     }
 }
@@ -215,6 +222,7 @@ impl From<&str> for Failure {
         Failure {
             error: error.to_string(),
             gifter: None,
+            unconfirmed: false,
         }
     }
 }
@@ -231,6 +239,12 @@ impl Attempt {
         match self {
             Attempt::Next(m) | Attempt::Stop(m) => m,
         }
+    }
+
+    /// The allocator answered that it submitted the registration and did not
+    /// see it land within its budget.
+    fn unconfirmed(&self) -> bool {
+        matches!(self, Attempt::Stop(m) if m.starts_with(crate::wire::UNCONFIRMED_PREFIX))
     }
 }
 
@@ -513,11 +527,13 @@ pub fn request(args_json: &str) -> Result<Value, Failure> {
                             tried.push(format!("{}: {e}", c.peer_id));
                             last_reply = replied.then_some((c.peer_id, true));
                         }
-                        Err((Attempt::Stop(e), replied)) => {
+                        Err((stop, replied)) => {
+                            let unconfirmed = replied && stop.unconfirmed();
                             return Err(Failure {
-                                error: format!("{}: {e}", c.peer_id),
+                                error: format!("{}: {}", c.peer_id, stop.message()),
                                 gifter: replied.then_some((c.peer_id, true)),
-                            })
+                                unconfirmed,
+                            });
                         }
                     }
                 }
@@ -531,14 +547,18 @@ pub fn request(args_json: &str) -> Result<Value, Failure> {
                 out["discovered"] = json!(false);
                 Ok(out)
             }
-            Err((e, replied)) => Err(Failure {
-                error: if tried.is_empty() {
-                    e.message()
-                } else {
-                    format!("{}; before that: {}", e.message(), tried.join("; "))
-                },
-                gifter: replied.then(|| (peer_id.to_owned(), false)),
-            }),
+            Err((e, replied)) => {
+                let unconfirmed = replied && e.unconfirmed();
+                Err(Failure {
+                    error: if tried.is_empty() {
+                        e.message()
+                    } else {
+                        format!("{}; before that: {}", e.message(), tried.join("; "))
+                    },
+                    gifter: replied.then(|| (peer_id.to_owned(), false)),
+                    unconfirmed,
+                })
+            }
         };
     }
     Err(Failure {
@@ -547,6 +567,7 @@ pub fn request(args_json: &str) -> Result<Value, Failure> {
             tried.join("; ")
         ),
         gifter: last_reply,
+        unconfirmed: false,
     })
 }
 
@@ -953,7 +974,7 @@ mod tests {
         let f = super::request(&args).unwrap_err();
         assert_eq!(
             f.json(),
-            json!({ "error": "A: unconfirmed: not on chain", "gifterPeerId": "A", "discovered": true })
+            json!({ "error": "A: unconfirmed: not on chain", "gifterPeerId": "A", "discovered": true, "unconfirmed": true })
         );
 
         let pair = format!(
@@ -964,7 +985,7 @@ mod tests {
         let f = super::request(&pair).unwrap_err();
         assert_eq!(
             f.json(),
-            json!({ "error": "unconfirmed: not on chain", "gifterPeerId": "G", "discovered": false })
+            json!({ "error": "unconfirmed: not on chain", "gifterPeerId": "G", "discovered": false, "unconfirmed": true })
         );
 
         // Nobody read the request: no allocator to name.

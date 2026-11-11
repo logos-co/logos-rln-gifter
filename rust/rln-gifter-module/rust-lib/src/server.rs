@@ -33,11 +33,13 @@ const READ_TIMEOUT_MS: i32 = 60_000;
 const WRITE_TIMEOUT_MS: i32 = 30_000;
 const REGISTER_TIMEOUT_MS: i32 = 190_000;
 /// How long a submitted registration may take to show up on chain before the
-/// request is answered as unconfirmed, and how often the registry is read
-/// meanwhile. The client allows REQUEST_TIMEOUT_MS (190 s) for the whole
-/// exchange; one registration fits per block.
-const CONFIRM_BUDGET: std::time::Duration = std::time::Duration::from_secs(150);
-const CONFIRM_POLL: std::time::Duration = std::time::Duration::from_secs(2);
+/// request is answered as unconfirmed, unless `serve` names another
+/// (`confirmBudgetSec`), and how often the registry is read meanwhile. The
+/// client allows REQUEST_TIMEOUT_MS (190 s) for the whole exchange, so a
+/// budget much above this default makes the client give up before the
+/// answer; one registration fits per block.
+const DEFAULT_CONFIRM_BUDGET_S: u64 = 150;
+const CONFIRM_POLL_S: u64 = 2;
 const GET_MEMBERSHIP_TIMEOUT_MS: i32 = 30_000;
 const MOUNT_TIMEOUT_MS: i32 = 30_000;
 const ADVERTISE_TIMEOUT_MS: i32 = 30_000;
@@ -63,6 +65,9 @@ struct ServerCfg {
     /// Every served registry (ConfigState account, lowercase) with its own
     /// rate cap; the default one included.
     registries: HashMap<String, RegistryCfg>,
+    /// Seconds a submitted registration may take to show on chain before the
+    /// request is answered as unconfirmed.
+    confirm_budget_s: u64,
     /// Vector verifiers: authentication_type → (module, opaque per-vector
     /// config). Every vector — the reference keycard/eth modules included —
     /// is a plugin implementing the rln_auth_vector verifier contract; this
@@ -338,7 +343,7 @@ impl Advertiser {
 
 /// Server entry point (the trait's `serve`): args
 /// `{config, registries?, authVerifiers?, consumedNullifiersPath?,
-///  maxRateLimit?, advertise?, advertiseAddrs?}`.
+///  maxRateLimit?, confirmBudgetSec?, advertise?, advertiseAddrs?}`.
 /// `wallet` is accepted and ignored: every registration is paid by the
 /// registry module's own payer (`REGISTRY_MODULE_PAYER`).
 /// `config` is the registry a request naming none is served on; `registries`
@@ -370,6 +375,8 @@ impl Advertiser {
 /// libp2p_module answers only it, so a re-serve that changes the
 /// advertisement hands the change to the worker (`advertisePending`).
 /// Mounts the protocol and starts the serialized serve worker. Returns
+/// `confirmBudgetSec` (default 150) is how long a submitted registration may
+/// take to show on chain before the request is answered `unconfirmed: …`.
 /// `{mounted:true, registries:[…], advertised:bool, advertisePending?,
 ///  serviceId?, serviceData?, advertisedToPeers?, advertiseError?}`.
 pub fn serve(state: &mut ServeState, args_json: &str) -> Result<Value, String> {
@@ -394,6 +401,13 @@ pub fn serve(state: &mut ServeState, args_json: &str) -> Result<Value, String> {
         .get("maxRateLimit")
         .and_then(Value::as_u64)
         .unwrap_or(DEFAULT_MAX_RATE);
+    let confirm_budget_s = match a.get("confirmBudgetSec") {
+        None | Some(Value::Null) => DEFAULT_CONFIRM_BUDGET_S,
+        Some(v) => v
+            .as_u64()
+            .filter(|s| *s >= 1)
+            .ok_or("confirmBudgetSec must be a positive integer (seconds)")?,
+    };
     let nullifiers_path = a
         .get("consumedNullifiersPath")
         .and_then(Value::as_str)
@@ -456,6 +470,7 @@ pub fn serve(state: &mut ServeState, args_json: &str) -> Result<Value, String> {
     *lock(&SERVER) = Some(Arc::new(ServerCfg {
         default_config,
         registries,
+        confirm_budget_s,
         auth_verifiers,
     }));
 
@@ -793,7 +808,12 @@ fn handle_request(buf: &[u8], peer_id: Option<&str>) -> RlnGifterResponse {
         }
     }
 
-    match register(&registry, &req.identity_commitment, rate) {
+    match register(
+        &registry,
+        &req.identity_commitment,
+        rate,
+        cfg.confirm_budget_s,
+    ) {
         Ok(success) => RlnGifterResponse {
             request_id: req.request_id,
             auth_success: true,
@@ -909,6 +929,7 @@ fn register(
     registry: &str,
     id_commitment: &[u8],
     rate: u64,
+    confirm_budget_s: u64,
 ) -> Result<MembershipAllocationSuccess, RegisterError> {
     let idc_hex = hex::encode(id_commitment);
     let reply = lp::call_module_json_classified(
@@ -971,7 +992,7 @@ fn register(
         }
     }
 
-    let deadline = std::time::Instant::now() + CONFIRM_BUDGET;
+    let deadline = lp::now_s() + confirm_budget_s;
     loop {
         if let Ok(m) = lp::call_module_json(
             lp::LEZ_RLN_MODULE,
@@ -989,14 +1010,13 @@ fn register(
                 });
             }
         }
-        if std::time::Instant::now() >= deadline {
+        if lp::now_s() >= deadline {
             return Err(RegisterError::Unconfirmed(format!(
-                "registration submitted (tx {}) but not on chain within {}s; it may still land",
-                hex::encode(&tx_hash_bytes),
-                CONFIRM_BUDGET.as_secs()
+                "registration submitted (tx {}) but not on chain within {confirm_budget_s}s; it may still land",
+                hex::encode(&tx_hash_bytes)
             )));
         }
-        std::thread::sleep(CONFIRM_POLL);
+        lp::sleep_s(CONFIRM_POLL_S);
     }
 }
 
@@ -1020,6 +1040,7 @@ mod tests {
         Arc::new(ServerCfg {
             default_config: served[0].clone(),
             registries,
+            confirm_budget_s: DEFAULT_CONFIRM_BUDGET_S,
             auth_verifiers: HashMap::new(),
         })
     }
@@ -1717,6 +1738,60 @@ mod tests {
         lp::fake::clear();
         reset_ads();
         let _ = std::fs::remove_file(&store);
+    }
+
+    // The registry never shows the membership: the request is answered
+    // unconfirmed once the budget `serve` named has passed, not the default.
+    #[test]
+    fn an_unconfirmed_registration_is_answered_after_the_configured_budget() {
+        let _g = lock(&AD_STATE);
+        reset_ads();
+        let store = tmp("confirm-budget");
+        lp::fake::install(Box::new(|_, method, _| match method {
+            rln_auth_vector::VERIFY_METHOD => Ok(json!({ "ok": true, "nullifier": "ff" })),
+            "register_member" => Ok(json!({ "leaf_index": 3 })),
+            "get_membership" => Ok(json!({ "registered": false })),
+            "mountProtocol" => Err("refused in test".into()),
+            m => Err(format!("unscripted {m}")),
+        }));
+        let args = json!({
+            "config": acct(0xd),
+            "advertise": false,
+            "consumedNullifiersPath": store,
+            "confirmBudgetSec": 7,
+            "authVerifiers": { "t": { "module": "verifier_module" } },
+        })
+        .to_string();
+        assert_eq!(serve(&args).unwrap_err(), "mountProtocol: refused in test");
+
+        let start = lp::now_s();
+        let resp = handle_request(&vector_request("r7").encode(), Some("peer"));
+        assert_eq!(
+            failure_text(&resp),
+            "unconfirmed: registration submitted (tx ) but not on chain within 7s; it may still land"
+        );
+        let waited = lp::now_s() - start;
+        assert!(
+            (7..DEFAULT_CONFIRM_BUDGET_S).contains(&waited),
+            "waited {waited}s"
+        );
+        // An unknown outcome keeps the credential spent.
+        let nul = rln_auth_vector::namespaced_nullifier(&acct(0xd), "t", "ff");
+        assert!(auth::load_nullifiers(&store).unwrap().contains(&nul));
+
+        *lock(&SERVER) = None;
+        lp::fake::clear();
+        reset_ads();
+        let _ = std::fs::remove_file(&store);
+    }
+
+    #[test]
+    fn serve_rejects_a_confirm_budget_that_is_not_a_positive_integer() {
+        for bad in [json!(0), json!("150"), json!(-5), json!(1.5)] {
+            let args = json!({ "config": acct(1), "confirmBudgetSec": bad }).to_string();
+            let e = serve(&args).unwrap_err();
+            assert!(e.contains("confirmBudgetSec"), "{bad}: {e}");
+        }
     }
 
     // `wallet` is optional: a serve without it gets as far as one with it.
