@@ -1,5 +1,5 @@
 {
-  description = "Logos module verifying the RLN gifter's auth vectors (allocator side)";
+  description = "Logos module verifying auth vectors for sponsored-action services (service side)";
 
   inputs = {
     logos-module-builder.url = "github:logos-co/logos-module-builder/6ef42ea8661121831ece79e6b702e27ac1cf46e7";

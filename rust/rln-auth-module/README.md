@@ -1,8 +1,9 @@
-# rln-auth-module — the gifter's verifier
+# rln-auth-module — the verifier
 
-One module answers every auth vector an allocator can be configured with.
-The allocator calls `verify_auth(args_json)` with the `auth_vector`
-(contract v3) VerifyRequest
+One module answers every auth vector a sponsored-action service (the
+membership allocator, the account registry service) can be configured with.
+The service calls `verify_auth(args_json)` with the `auth_vector`
+VerifyRequest
 `{"auth_type","payload_hex","domain","action_hex","config"?,"peer_id"?}`.
 `auth_type` is a composition, `<scheme>-<authoriser>`, and the module
 resolves both halves from the registry it builds at load (`auth_vectors`).
@@ -22,8 +23,8 @@ lists the twelve compositions.
 | `keycard` | card identity key | `allowlist` / `any` / `attestation` | `{"allowlist":["<33-byte hex>"]}` / `{"audience"?}` / `{"trusted_cas":["<33-byte hex>"],"audience"?}` | ident_pub hex / ident_pub hex / keccak(ident_pub) |
 | `peer` | the requester's peer id, from the request's `peer_id` (the transport's) | `allowlist` / `any` | `{"allowlist":["<peer id>"]}` / `{}` | peer id multihash hex |
 
-The rules every composition shares (the payload frame `03 ‖ part ‖
-evidence`, the binding digest under `logos/auth/<domain>/<auth_type>/3`,
+The rules every composition shares (the payload `part ‖ evidence`,
+the binding digest under `logos/auth/<domain>/<auth_type>`,
 reject-vs-error) are in logos-paymaster-crates `docs/auth-vectors.md`. The
 pieces themselves live in its `crates/auth-vectors`; this module only
 composes them.

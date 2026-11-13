@@ -1,8 +1,8 @@
-// The keycard scheme's PRODUCER for gifted RLN registration: the physical
-// card signs the binding digest through IDENTIFY_CARD over PC/SC. Kept apart
-// from rln-sign-module so a client without a reader never links pcsclite,
-// and from the gifter side so a headless allocator never does either.
-// FEATURE: RLN membership gifter keycard capture module (client-side PC/SC)
+// Producer for the keycard scheme of auth vectors used by sponsored-action
+// services (the membership allocator and the account registry service): the
+// physical card signs the binding digest through IDENTIFY_CARD over PC/SC.
+// Kept apart from rln-sign-module so a client without a reader never links
+// pcsclite, and from the verifier so a headless service never does either.
 
 use auth_vector::{dispatch_produce, ProduceRegistry};
 use auth_vectors::claimant::{AllowlistClaimant, AttestationClaimant};
@@ -12,7 +12,7 @@ use serde_json::json;
 
 // OWNERSHIP: the generated host keeps the instance in a process-lifetime any-box, so the module owns all its data.
 pub trait KeycardCaptureModule: Send + 'static {
-    /// auth_vector PRODUCE_METHOD (contract v3) for `keycard-allowlist` and
+    /// auth_vector PRODUCE_METHOD for `keycard-allowlist` and
     /// `keycard-attestation`: IDENTIFY_CARD with the binding digest of the
     /// request's `domain`, `action_hex` and `args.audience` (default "") as
     /// the challenge, so the card proves the holder owns a genuine card for

@@ -1,11 +1,11 @@
-// The RLN gifter's VERIFIER module: every scheme × authoriser composition
-// the auth_vectors crate ships, answered from one registry. The allocator
-// calls `verify_auth` with the auth_vector (contract v3) VerifyRequest; its
+// Verifier for auth vectors used by sponsored-action services (the
+// membership allocator and the account registry service): every scheme ×
+// authoriser composition the auth_vectors crate ships, answered from one
+// registry. A service calls `verify_auth` with the auth_vector VerifyRequest; its
 // `auth_type` (`<scheme>-<authoriser>`) picks the two halves, the authoriser
 // reads its own config, and `domain` + `action_hex` are what the payload
 // must be bound to. Nullifiers are the authoriser's; the allocator
 // namespaces and persists them.
-// FEATURE: RLN gifter auth vectors (verify)
 
 use auth_vector::{dispatch_verify, VerifyRegistry};
 use auth_vectors::authoriser::{Allowlist, Any, Attestation, PowClaim};
@@ -13,7 +13,7 @@ use auth_vectors::scheme::{Eth, Keycard, Lez, Logos, Peer};
 
 // OWNERSHIP: the generated host keeps the instance in a process-lifetime any-box, so the module owns all its data.
 pub trait RlnAuthModule: Send + 'static {
-    /// auth_vector VERIFY_METHOD (contract v3). One JSON-string arg, the
+    /// auth_vector VERIFY_METHOD. One JSON-string arg, the
     /// VerifyRequest `{"auth_type","payload_hex","domain","action_hex",
     /// "config"?,"peer_id"?}`: `auth_type` is `<scheme>-<authoriser>` over
     /// the schemes eth, lez, logos, keycard, peer and the authorisers
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn peer_any_accepts_the_transport_peer_through_the_module() {
         let peer = "16Uiu2HAkyiMKmjcAj4FS5jot1jMZB73mnY3wJnSTKZmTBhrFJEaT";
-        let mut req = verify_req("peer-any", "03", json!({}));
+        let mut req = verify_req("peer-any", "", json!({}));
         req["peer_id"] = json!(peer);
         let out = call(&req);
         assert_eq!(out["ok"], true, "{out}");
@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(out["nullifier"], id);
         assert_eq!(out["identity"], id);
         assert_eq!(out["scheme"], "peer");
-        let out = call(&verify_req("peer-any", "03", json!({})));
+        let out = call(&verify_req("peer-any", "", json!({})));
         assert!(
             out["error"]
                 .as_str()
@@ -218,10 +218,8 @@ mod tests {
             ),
         ];
         for (auth_type, config, needle) in cases {
-            // A v3 frame whose body is 10 garbage bytes.
-            let mut body = vec![3u8];
-            body.extend_from_slice(&[0xaa; 10]);
-            let out = call(&verify_req(auth_type, &hex::encode(&body), config));
+            // A payload of 10 garbage bytes.
+            let out = call(&verify_req(auth_type, &hex::encode([0xaa; 10]), config));
             assert_eq!(out["ok"], false, "{auth_type}: {out}");
             let reason = out["reason"]
                 .as_str()
@@ -283,35 +281,14 @@ mod tests {
     }
 
     #[test]
-    fn v2_requests_and_frames_are_refused() {
-        let out = call(&json!({
-            "auth_type": "eth-allowlist", "payload_hex": "02", "rate": 100,
-            "id_commitment_hex": ACTION, "config": { "allowlist": [ADDR42] },
-        }));
-        assert!(
-            out["error"].as_str().unwrap().contains("verify_auth args"),
-            "{out}"
-        );
-        let mut v2 = vec![2u8];
-        v2.extend_from_slice(&[0xaa; 65]);
-        v2.extend_from_slice(&100u64.to_le_bytes());
-        let out = call(&verify_req(
-            "eth-allowlist",
-            &hex::encode(&v2),
-            json!({ "allowlist": [ADDR42] }),
-        ));
-        assert_eq!(out["reason"], "payload version 2, want 3", "{out}");
-    }
-
-    #[test]
     fn unknown_and_refused_compositions_use_the_error_envelope() {
-        let out = call(&verify_req("nope-allowlist", "03", json!({})));
+        let out = call(&verify_req("nope-allowlist", "", json!({})));
         assert!(out.get("ok").is_none(), "{out}");
         assert!(
             out["error"].as_str().unwrap().contains("unknown auth_type"),
             "{out}"
         );
-        let out = call(&verify_req("eth-attestation", "03", json!({})));
+        let out = call(&verify_req("eth-attestation", "", json!({})));
         assert!(
             out["error"]
                 .as_str()
@@ -319,7 +296,7 @@ mod tests {
                 .contains("does not accept the eth scheme"),
             "{out}"
         );
-        let mut req = verify_req("eth-allowlist", "03", json!({ "allowlist": [ADDR42] }));
+        let mut req = verify_req("eth-allowlist", "", json!({ "allowlist": [ADDR42] }));
         req["domain"] = json!("RLN-Membership");
         let out = call(&req);
         assert!(

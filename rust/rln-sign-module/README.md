@@ -1,9 +1,9 @@
-# rln-sign-module — the client's producer
+# rln-sign-module — the producer
 
 The produce half of every auth vector that needs no card hardware, in one
-module, so a membership module can drive any of them through
+module, so a client module can drive any of them through
 `auth_provider`. `produce_auth(args_json)` takes the `auth_vector`
-(contract v3) ProduceRequest `{"auth_type","domain","action_hex","args"?}`
+ProduceRequest `{"auth_type","domain","action_hex","args"?}`
 and returns `{"payload_hex"}` or `{"error"}`. `auth_type` is
 `<scheme>-<authoriser>` over the schemes `eth`, `lez`, `logos`, `peer` and
 the authorisers `allowlist`, `any`, `pow-claim` (logos only); the keycard
@@ -19,7 +19,7 @@ verifies nowhere else. `args` may be an object or a string holding one.
 | `eth` | module-owned secp256k1 key, or `args.private_key` | `audience`?, `private_key`? | `0x…` address |
 | `lez` | module-owned LEZ account key, or `args.private_key` | same | account id (hex + base58) |
 | `logos` | the node's KMS key (`POST /wallet/sign/zk`) | `node_url`? (default `http://127.0.0.1:8080`), `public_key`?, `http_timeout_ms`?, `audience`? | key K |
-| `peer` | none: the payload is the bare frame `03` and the verifier takes the identity from its transport | — | `args.peer_id` (the node's own, from `libp2p_module.peerInfo`) |
+| `peer` | none: the payload is empty and the verifier takes the identity from its transport | — | `args.peer_id` (the node's own, from `libp2p_module.peerInfo`) |
 
 eth signs EIP-191 over the text `Logos <domain> authorisation: 0x<digest>`,
 which any wallet can sign too. `pow-claim` adds the claim locator from the
@@ -38,7 +38,7 @@ Key custody is demo-grade on purpose: one plaintext hex file per scheme
 under the module's host-stamped persistence path (0600); a host that stamps
 no path gets in-memory keys that change per run.
 
-The rules every composition shares (the payload frame, the binding digest,
+The rules every composition shares (the payload layout, the binding digest,
 the eth text) are in logos-paymaster-crates `docs/auth-vectors.md`; the
 pieces are its `crates/auth-vectors`.
 

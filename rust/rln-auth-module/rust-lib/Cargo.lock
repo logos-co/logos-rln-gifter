@@ -241,7 +241,7 @@ dependencies = [
 [[package]]
 name = "auth_vector"
 version = "0.3.1"
-source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=32f4a3a4f962f8d4a8e38f55a52e78023f33230f#32f4a3a4f962f8d4a8e38f55a52e78023f33230f"
+source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=52b842352d68c66e84858e4e98f952cb0ab4537f#52b842352d68c66e84858e4e98f952cb0ab4537f"
 dependencies = [
  "hex",
  "serde",
@@ -252,7 +252,7 @@ dependencies = [
 [[package]]
 name = "auth_vectors"
 version = "0.2.0"
-source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=32f4a3a4f962f8d4a8e38f55a52e78023f33230f#32f4a3a4f962f8d4a8e38f55a52e78023f33230f"
+source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=52b842352d68c66e84858e4e98f952cb0ab4537f#52b842352d68c66e84858e4e98f952cb0ab4537f"
 dependencies = [
  "auth_vector",
  "base58",
@@ -982,7 +982,7 @@ dependencies = [
 [[package]]
 name = "keycard_attest"
 version = "0.2.0"
-source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=32f4a3a4f962f8d4a8e38f55a52e78023f33230f#32f4a3a4f962f8d4a8e38f55a52e78023f33230f"
+source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=52b842352d68c66e84858e4e98f952cb0ab4537f#52b842352d68c66e84858e4e98f952cb0ab4537f"
 dependencies = [
  "k256",
  "sha2",
@@ -1260,7 +1260,7 @@ dependencies = [
 [[package]]
 name = "pow-claim"
 version = "0.2.0"
-source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=32f4a3a4f962f8d4a8e38f55a52e78023f33230f#32f4a3a4f962f8d4a8e38f55a52e78023f33230f"
+source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=52b842352d68c66e84858e4e98f952cb0ab4537f#52b842352d68c66e84858e4e98f952cb0ab4537f"
 dependencies = [
  "ark-ff",
  "auth_vector",
@@ -1945,7 +1945,7 @@ dependencies = [
 [[package]]
 name = "zksign_light"
 version = "0.2.0"
-source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=32f4a3a4f962f8d4a8e38f55a52e78023f33230f#32f4a3a4f962f8d4a8e38f55a52e78023f33230f"
+source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=52b842352d68c66e84858e4e98f952cb0ab4537f#52b842352d68c66e84858e4e98f952cb0ab4537f"
 dependencies = [
  "ark-ff",
  "auth_vector",

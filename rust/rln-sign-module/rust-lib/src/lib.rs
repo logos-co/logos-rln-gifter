@@ -1,6 +1,7 @@
-// The RLN gifter's PRODUCER module: the client-side half of every auth
-// vector that needs no card hardware, so a membership module can drive any
-// of them through `auth_provider`:
+// Producer for auth vectors used by sponsored-action services (the
+// membership allocator and the account registry service): the client-side
+// half of every auth vector that needs no card hardware, so a client module
+// can drive any of them through `auth_provider`:
 //   eth     EIP-191 by a module-owned secp256k1 key
 //   lez     BIP-340 by a module-owned LEZ account key
 //   logos   zkSign by a logos-blockchain node key (+ pow-claim discovery)
@@ -11,7 +12,6 @@
 // hex file under the module's host-stamped persistence path (0600). Hosts
 // that stamp no path (logos-standalone-app) get in-memory keys that change
 // per run. The logos key never leaves the node's KMS.
-// FEATURE: RLN gifter auth vectors (produce)
 
 use std::sync::Arc;
 
@@ -30,7 +30,7 @@ use zksign_light::ZkNode;
 
 // OWNERSHIP: the generated host keeps the instance in a process-lifetime any-box, so the module owns all its data.
 pub trait RlnSignModule: Send + 'static {
-    /// auth_vector PRODUCE_METHOD (contract v3). One JSON-string arg, the
+    /// auth_vector PRODUCE_METHOD. One JSON-string arg, the
     /// ProduceRequest `{"auth_type","domain","action_hex","args"?}` →
     /// `{"payload_hex"}` or `{"error"}`. `auth_type` is
     /// `<scheme>-<authoriser>` over the schemes eth, lez, logos, peer and the
@@ -42,7 +42,7 @@ pub trait RlnSignModule: Send + 'static {
     /// another one; logos asks the node (`args`:
     /// `{"node_url"?,"public_key"?,"http_timeout_ms"?}`); pow-claim finds the
     /// claim on that node (`args.claim_address` etc.); peer signs nothing
-    /// (the payload is the bare frame `03`). Every vector binds `domain`,
+    /// (the payload is empty). Every vector binds `domain`,
     /// `action_hex` and `args.audience` (default ""). `args` may be an
     /// object or a string holding one.
     fn produce_auth(&mut self, args_json: String) -> String;
@@ -628,7 +628,7 @@ mod tests {
         let id = identity(&mut m, "eth");
         assert_eq!(id["persisted"], false);
         let payload = payload_of(&m.produce_auth(produce_req("eth-allowlist", ACTION, None)));
-        assert_eq!(payload.len(), (1 + 65) * 2);
+        assert_eq!(payload.len(), 65 * 2);
         let v = verified(
             "eth-allowlist",
             &payload,
@@ -731,7 +731,7 @@ mod tests {
         let id = identity(&mut m, "lez");
         assert_eq!(id["persisted"], false);
         let payload = payload_of(&m.produce_auth(produce_req("lez-allowlist", ACTION, None)));
-        assert_eq!(payload.len(), (1 + 96) * 2);
+        assert_eq!(payload.len(), 96 * 2);
         let v = verified(
             "lez-allowlist",
             &payload,
@@ -857,17 +857,17 @@ mod tests {
         let node = FakeNode::new(vec![K]);
         let mut m = RlnSign::with_node(Some(Arc::<FakeNode>::clone(&node)));
         let eth = payload_of(&m.produce_auth(produce_req("eth-allowlist", ACTION, None)));
-        assert_eq!(eth.len(), (1 + 65) * 2);
+        assert_eq!(eth.len(), 65 * 2);
         let lez = payload_of(&m.produce_auth(produce_req("lez-allowlist", ACTION, None)));
-        assert_eq!(lez.len(), (1 + 96) * 2);
+        assert_eq!(lez.len(), 96 * 2);
         assert_eq!(
             *node.signed.lock().unwrap(),
             0,
             "eth/lez must not touch the node"
         );
         let logos = payload_of(&m.produce_auth(produce_req("logos-allowlist", ACTION, None)));
-        assert_eq!(logos.len(), (1 + 160) * 2);
-        assert_eq!(&logos[2..66], K);
+        assert_eq!(logos.len(), 160 * 2);
+        assert_eq!(&logos[..64], K);
         assert_eq!(*node.signed.lock().unwrap(), 1);
         let v = verified("logos-allowlist", &logos, K, &json!({}));
         assert!(
@@ -1031,8 +1031,6 @@ mod tests {
         assert!(m.store.cached(Kind::Lez).is_none());
     }
 
-    // ---- contract v3 ----
-
     #[test]
     fn produce_answers_every_composition_without_a_card() {
         assert_eq!(
@@ -1074,13 +1072,8 @@ mod tests {
     }
 
     #[test]
-    fn v2_requests_and_bad_domains_are_errors() {
+    fn bad_domains_are_errors() {
         let mut m = RlnSign::default();
-        let v2 = m.produce_auth(
-            json!({ "auth_type": "eth-allowlist", "id_commitment_hex": ACTION, "args": { "rate_max": 5 } })
-                .to_string(),
-        );
-        assert!(v2.contains("produce_auth args"), "{v2}");
         let bad = m.produce_auth(
             json!({ "auth_type": "eth-allowlist", "domain": "RLN", "action_hex": ACTION })
                 .to_string(),
@@ -1096,7 +1089,7 @@ mod tests {
     fn peer_signs_nothing_and_identity_reads_args_peer_id() {
         let mut m = RlnSign::default();
         let payload = payload_of(&m.produce_auth(produce_req("peer-any", ACTION, None)));
-        assert_eq!(payload, "03");
+        assert_eq!(payload, "");
         let r = VerifyRegistry::new().scheme(Peer).authoriser(Any);
         let req = json!({ "auth_type": "peer-any", "payload_hex": payload, "domain": DOMAIN,
             "action_hex": ACTION, "peer_id": PEER });

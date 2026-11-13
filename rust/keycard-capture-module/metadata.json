@@ -1,7 +1,7 @@
 {
   "name": "keycard_capture_module",
   "version": "0.3.1",
-  "description": "The keycard scheme's producer for gifted RLN registration (auth_vector v3 produce_auth, bound to the service domain + action; client-side PC/SC): keycard-allowlist and keycard-attestation",
+  "description": "The keycard scheme's producer for auth vectors used by sponsored-action services (auth_vector produce_auth, bound to the service domain + action; client-side PC/SC): keycard-allowlist and keycard-attestation",
   "author": "Logos",
   "type": "core",
   "interface": "cdylib",

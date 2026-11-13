@@ -13,13 +13,13 @@ panic = "abort"
 
 [dependencies]
 serde_json = "1"
-auth_vector = { git = "https://github.com/logos-co/logos-paymaster-crates", rev = "32f4a3a4f962f8d4a8e38f55a52e78023f33230f" }
-auth_vectors = { git = "https://github.com/logos-co/logos-paymaster-crates", rev = "32f4a3a4f962f8d4a8e38f55a52e78023f33230f", default-features = false, features = ["verify"] }
+auth_vector = { git = "https://github.com/logos-co/logos-paymaster-crates", rev = "52b842352d68c66e84858e4e98f952cb0ab4537f" }
+auth_vectors = { git = "https://github.com/logos-co/logos-paymaster-crates", rev = "52b842352d68c66e84858e4e98f952cb0ab4537f", default-features = false, features = ["verify"] }
 logos-rust-sdk = { path = "../logos-rust-sdk-src" }
 
 [dev-dependencies]
 hex = "0.4"
-auth_vectors = { git = "https://github.com/logos-co/logos-paymaster-crates", rev = "32f4a3a4f962f8d4a8e38f55a52e78023f33230f", default-features = false, features = ["verify", "sign"] }
+auth_vectors = { git = "https://github.com/logos-co/logos-paymaster-crates", rev = "52b842352d68c66e84858e4e98f952cb0ab4537f", default-features = false, features = ["verify", "sign"] }
 
 [lints.rust]
 unused_lifetimes = "warn"

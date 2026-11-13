@@ -1,7 +1,7 @@
 {
   "name": "rln_auth_module",
   "version": "0.2.1",
-  "description": "The RLN gifter's verifier (auth_vector v3 verify_auth, bound to the service domain + action): every scheme × authoriser composition — eth/lez/logos/keycard/peer with allowlist or any, keycard-attestation, logos-pow-claim",
+  "description": "The verifier for auth vectors used by sponsored-action services (auth_vector verify_auth, bound to the service domain + action): every scheme × authoriser composition — eth/lez/logos/keycard/peer with allowlist or any, keycard-attestation, logos-pow-claim",
   "author": "Logos",
   "type": "core",
   "interface": "cdylib",
