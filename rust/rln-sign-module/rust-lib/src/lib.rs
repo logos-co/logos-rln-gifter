@@ -15,14 +15,12 @@
 
 use std::sync::Arc;
 
-use rln_auth_vector::Signer;
-use rln_auth_vector::{dispatch_produce, AuthType, ProduceRegistry};
-use rln_auth_vectors::claimant::{
-    AllowlistClaimant, AnyClaimant, AttestationClaimant, PowClaimant,
-};
-use rln_auth_vectors::scheme::eth::address_of;
-use rln_auth_vectors::signer::logos::resolve_key;
-use rln_auth_vectors::signer::{
+use auth_vector::Signer;
+use auth_vector::{dispatch_produce, AuthType, ProduceRegistry};
+use auth_vectors::claimant::{AllowlistClaimant, AnyClaimant, AttestationClaimant, PowClaimant};
+use auth_vectors::scheme::eth::address_of;
+use auth_vectors::signer::logos::resolve_key;
+use auth_vectors::signer::{
     EthSigner, KeySource, LezKey, LezSigner, LogosSigner, NodeArgs, PeerSigner,
 };
 use serde_json::{json, Value};
@@ -32,21 +30,27 @@ use zksign_light::ZkNode;
 
 // OWNERSHIP: the generated host keeps the instance in a process-lifetime any-box, so the module owns all its data.
 pub trait RlnSignModule: Send + 'static {
-    /// rln_auth_vector PRODUCE_METHOD. One JSON-string arg (ProduceRequest)
-    /// → `{"payload_hex"}` or `{"error"}`. `auth_type` is
-    /// `<scheme>-<authoriser>` over the schemes eth, lez, logos and the
-    /// authorisers allowlist, attestation, pow-claim. eth and lez sign with
-    /// the module key of that scheme unless `args.private_key` (hex, optional
-    /// 0x) names another one; logos asks the node (`args`:
+    /// auth_vector PRODUCE_METHOD (contract v3). One JSON-string arg, the
+    /// ProduceRequest `{"auth_type","domain","action_hex","args"?}` →
+    /// `{"payload_hex"}` or `{"error"}`. `auth_type` is
+    /// `<scheme>-<authoriser>` over the schemes eth, lez, logos, peer and the
+    /// authorisers allowlist, any, pow-claim (logos only); `domain` is the
+    /// service's (1..=64 bytes of `[a-z0-9-]`, e.g. `rln-membership`) and
+    /// `action_hex` the 32-byte action digest that service computes over
+    /// the request (64 hex, optional 0x). eth and lez sign with the module
+    /// key of that scheme unless `args.private_key` (hex, optional 0x) names
+    /// another one; logos asks the node (`args`:
     /// `{"node_url"?,"public_key"?,"http_timeout_ms"?}`); pow-claim finds the
-    /// claim on that node (`args.claim_address` etc.). Every vector binds
-    /// `args.rate_max` (default 100) and `args.audience` (default "").
-    /// `args` may be an object or a string holding one.
+    /// claim on that node (`args.claim_address` etc.); peer signs nothing
+    /// (the payload is the bare frame `03`). Every vector binds `domain`,
+    /// `action_hex` and `args.audience` (default ""). `args` may be an
+    /// object or a string holding one.
     fn produce_auth(&mut self, args_json: String) -> String;
     /// What an allocator operator allowlists for one scheme.
     /// `{"scheme"|"auth_type","args"?}` → `{"scheme","id","persisted"}` plus
-    /// `"id_base58"` (lez) or `"source"` (logos; `args` as for produce).
-    /// Generates and persists the eth/lez module key on first use.
+    /// `"id_base58"` (lez) or `"source"` (logos, peer; `args` as for produce,
+    /// peer reads `args.peer_id`), and `"auth_type"` when the request named
+    /// one. Generates and persists the eth/lez module key on first use.
     fn identity(&mut self, req_json: String) -> String;
     /// Replace the eth or lez module key and persist it.
     /// `{"scheme"|"auth_type","private_key","force"?}` → the identity object,
@@ -110,7 +114,7 @@ impl Kind {
         }
     }
     fn parse(self, hex_str: &str) -> Result<[u8; 32], String> {
-        let bytes = hex::decode(rln_auth_vector::strip_0x(hex_str))
+        let bytes = hex::decode(auth_vector::strip_0x(hex_str))
             .map_err(|e| format!("private key hex: {e}"))?;
         let arr: [u8; 32] = bytes
             .try_into()
@@ -510,11 +514,14 @@ pub extern "Rust" fn logos_module_install() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rln_auth_vector::{dispatch_verify, VerifyRegistry};
-    use rln_auth_vectors::authoriser::Allowlist;
-    use rln_auth_vectors::scheme::{Eth, Lez, Logos};
+    use auth_vector::{dispatch_verify, VerifyRegistry};
+    use auth_vectors::authoriser::{Allowlist, Any};
+    use auth_vectors::scheme::peer::parse_peer_id;
+    use auth_vectors::scheme::{Eth, Lez, Logos, Peer};
 
-    const IDC: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+    const DOMAIN: &str = "rln-membership";
+    const ACTION: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
+    const PEER: &str = "16Uiu2HAkyiMKmjcAj4FS5jot1jMZB73mnY3wJnSTKZmTBhrFJEaT";
     const PK42: &str = "0x4242424242424242424242424242424242424242424242424242424242424242";
     const ADDR42: &str = "0x17c5185167401ed00cf5f5b2fc97d9bbfdb7d025";
     const SK3: &str = "0x0000000000000000000000000000000000000000000000000000000000000003";
@@ -558,8 +565,8 @@ mod tests {
         p.to_string_lossy().into_owned()
     }
 
-    fn produce_req(auth_type: &str, idc: &str, args: Option<Value>) -> String {
-        let mut v = json!({ "auth_type": auth_type, "id_commitment_hex": idc });
+    fn produce_req(auth_type: &str, action_hex: &str, args: Option<Value>) -> String {
+        let mut v = json!({ "auth_type": auth_type, "domain": DOMAIN, "action_hex": action_hex });
         if let Some(a) = args {
             v["args"] = a;
         }
@@ -591,7 +598,8 @@ mod tests {
         m
     }
 
-    /// The verify side, with `id` allowlisted: the nullifier is the identity.
+    /// The verify side for `DOMAIN` and `ACTION`, with `id` allowlisted
+    /// under `args.audience`: the nullifier is the identity.
     fn verified(auth_type: &str, payload_hex: &str, id: &str, args: &Value) -> Value {
         let r = VerifyRegistry::new()
             .scheme(Eth)
@@ -599,8 +607,8 @@ mod tests {
             .scheme(Logos)
             .authoriser(Allowlist);
         let cfg = json!({ "allowlist": [id], "audience": args.get("audience").cloned().unwrap_or(json!("")) });
-        let req = json!({ "auth_type": auth_type, "payload_hex": payload_hex, "id_commitment_hex": IDC,
-            "rate": args.get("rate_max").cloned().unwrap_or(json!(100)), "config": cfg });
+        let req = json!({ "auth_type": auth_type, "payload_hex": payload_hex, "domain": DOMAIN,
+            "action_hex": ACTION, "config": cfg });
         serde_json::from_str(&dispatch_verify(&req.to_string(), &r)).unwrap()
     }
 
@@ -619,8 +627,8 @@ mod tests {
         let mut m = RlnSign::default();
         let id = identity(&mut m, "eth");
         assert_eq!(id["persisted"], false);
-        let payload = payload_of(&m.produce_auth(produce_req("eth-allowlist", IDC, None)));
-        assert_eq!(payload.len(), (1 + 65 + 8) * 2);
+        let payload = payload_of(&m.produce_auth(produce_req("eth-allowlist", ACTION, None)));
+        assert_eq!(payload.len(), (1 + 65) * 2);
         let v = verified(
             "eth-allowlist",
             &payload,
@@ -629,6 +637,7 @@ mod tests {
         );
         assert_eq!(v["ok"], true, "{v}");
         assert_eq!(v["nullifier"], id["id"]);
+        assert_eq!(v["identity"], id["id"]);
     }
 
     #[test]
@@ -637,7 +646,7 @@ mod tests {
         let module_addr = identity(&mut m, "eth");
         let payload = payload_of(&m.produce_auth(produce_req(
             "eth-allowlist",
-            IDC,
+            ACTION,
             Some(json!({ "private_key": PK42 })),
         )));
         let v = verified("eth-allowlist", &payload, ADDR42, &json!({}));
@@ -649,17 +658,18 @@ mod tests {
     fn eth_malformed_requests_are_errors() {
         let mut m = RlnSign::default();
         let wrong_type = m.produce_auth(
-            json!({ "auth_type": "keycard-attestation", "id_commitment_hex": IDC }).to_string(),
+            json!({ "auth_type": "keycard-attestation", "domain": DOMAIN, "action_hex": ACTION })
+                .to_string(),
         );
         assert!(
             wrong_type.contains("no keycard signer"),
             "got: {wrong_type}"
         );
         let short = m.produce_auth(produce_req("eth-allowlist", "abcd", None));
-        assert!(short.contains("id_commitment_hex"), "got: {short}");
+        assert!(short.contains("action_hex"), "got: {short}");
         let bad_override = m.produce_auth(produce_req(
             "eth-allowlist",
-            IDC,
+            ACTION,
             Some(json!({ "private_key": "zz" })),
         ));
         assert!(
@@ -720,8 +730,8 @@ mod tests {
         let mut m = RlnSign::default();
         let id = identity(&mut m, "lez");
         assert_eq!(id["persisted"], false);
-        let payload = payload_of(&m.produce_auth(produce_req("lez-allowlist", IDC, None)));
-        assert_eq!(payload.len(), (1 + 96 + 8) * 2);
+        let payload = payload_of(&m.produce_auth(produce_req("lez-allowlist", ACTION, None)));
+        assert_eq!(payload.len(), (1 + 96) * 2);
         let v = verified(
             "lez-allowlist",
             &payload,
@@ -730,6 +740,7 @@ mod tests {
         );
         assert_eq!(v["ok"], true, "{v}");
         assert_eq!(v["nullifier"], id["id"]);
+        assert_eq!(v["identity"], id["id"]);
     }
 
     #[test]
@@ -738,7 +749,7 @@ mod tests {
         let module_id = identity(&mut m, "lez");
         let payload = payload_of(&m.produce_auth(produce_req(
             "lez-allowlist",
-            IDC,
+            ACTION,
             Some(json!({ "private_key": SK3 })),
         )));
         let v = verified("lez-allowlist", &payload, ACCT3_HEX, &json!({}));
@@ -750,10 +761,10 @@ mod tests {
     fn lez_malformed_requests_are_errors() {
         let mut m = RlnSign::default();
         let short = m.produce_auth(produce_req("lez-allowlist", "abcd", None));
-        assert!(short.contains("id_commitment_hex"), "got: {short}");
+        assert!(short.contains("action_hex"), "got: {short}");
         let bad_override = m.produce_auth(produce_req(
             "lez-allowlist",
-            IDC,
+            ACTION,
             Some(json!({ "private_key": "zz" })),
         ));
         assert!(
@@ -845,17 +856,17 @@ mod tests {
     fn produce_routes_per_auth_type() {
         let node = FakeNode::new(vec![K]);
         let mut m = RlnSign::with_node(Some(Arc::<FakeNode>::clone(&node)));
-        let eth = payload_of(&m.produce_auth(produce_req("eth-allowlist", IDC, None)));
-        assert_eq!(eth.len(), (1 + 65 + 8) * 2);
-        let lez = payload_of(&m.produce_auth(produce_req("lez-allowlist", IDC, None)));
-        assert_eq!(lez.len(), (1 + 96 + 8) * 2);
+        let eth = payload_of(&m.produce_auth(produce_req("eth-allowlist", ACTION, None)));
+        assert_eq!(eth.len(), (1 + 65) * 2);
+        let lez = payload_of(&m.produce_auth(produce_req("lez-allowlist", ACTION, None)));
+        assert_eq!(lez.len(), (1 + 96) * 2);
         assert_eq!(
             *node.signed.lock().unwrap(),
             0,
             "eth/lez must not touch the node"
         );
-        let logos = payload_of(&m.produce_auth(produce_req("logos-allowlist", IDC, None)));
-        assert_eq!(logos.len(), (1 + 160 + 8) * 2);
+        let logos = payload_of(&m.produce_auth(produce_req("logos-allowlist", ACTION, None)));
+        assert_eq!(logos.len(), (1 + 160) * 2);
         assert_eq!(&logos[2..66], K);
         assert_eq!(*node.signed.lock().unwrap(), 1);
         let v = verified("logos-allowlist", &logos, K, &json!({}));
@@ -975,7 +986,7 @@ mod tests {
     fn stringified_args_private_key_is_honoured() {
         let mut m = RlnSign::default();
         let args = Value::String(json!({ "private_key": PK42 }).to_string());
-        let payload = payload_of(&m.produce_auth(produce_req("eth-allowlist", IDC, Some(args))));
+        let payload = payload_of(&m.produce_auth(produce_req("eth-allowlist", ACTION, Some(args))));
         assert_eq!(
             verified("eth-allowlist", &payload, ADDR42, &json!({}))["ok"],
             true
@@ -985,23 +996,25 @@ mod tests {
             "the module key is not resolved when overridden"
         );
 
-        let args = Value::String(json!({ "private_key": SK3, "rate_max": 5 }).to_string());
-        let payload = payload_of(&m.produce_auth(produce_req("lez-allowlist", IDC, Some(args))));
-        assert_eq!(
-            &payload[payload.len() - 16..],
-            hex::encode(5u64.to_le_bytes())
-        );
+        let args =
+            Value::String(json!({ "private_key": SK3, "audience": "provider-a" }).to_string());
+        let payload = payload_of(&m.produce_auth(produce_req("lez-allowlist", ACTION, Some(args))));
         assert_eq!(
             verified(
                 "lez-allowlist",
                 &payload,
                 ACCT3_HEX,
-                &json!({ "rate_max": 5 })
+                &json!({ "audience": "provider-a" })
             )["ok"],
             true
         );
+        assert_eq!(
+            verified("lez-allowlist", &payload, ACCT3_HEX, &json!({}))["ok"],
+            false,
+            "the audience is bound"
+        );
 
-        let bad = m.produce_auth(produce_req("eth-allowlist", IDC, Some(json!("[1]"))));
+        let bad = m.produce_auth(produce_req("eth-allowlist", ACTION, Some(json!("[1]"))));
         assert!(bad.contains("expected JSON object"), "{bad}");
     }
 
@@ -1016,5 +1029,92 @@ mod tests {
         );
         let _ = m.produce_auth(produce_req("logos-allowlist", "abcd", None));
         assert!(m.store.cached(Kind::Lez).is_none());
+    }
+
+    // ---- contract v3 ----
+
+    #[test]
+    fn produce_answers_every_composition_without_a_card() {
+        assert_eq!(
+            RlnSign::default().registry.auth_types(),
+            [
+                "eth-allowlist",
+                "eth-any",
+                "lez-allowlist",
+                "lez-any",
+                "logos-allowlist",
+                "logos-any",
+                "logos-pow-claim",
+                "peer-allowlist",
+                "peer-any",
+            ]
+        );
+    }
+
+    #[test]
+    fn payloads_are_bound_to_the_domain_and_action() {
+        let mut m = RlnSign::default();
+        let payload = payload_of(&m.produce_auth(produce_req(
+            "eth-allowlist",
+            ACTION,
+            Some(json!({ "private_key": PK42 })),
+        )));
+        let r = VerifyRegistry::new().scheme(Eth).authoriser(Allowlist);
+        let verify = |domain: &str, action_hex: &str| -> Value {
+            let req = json!({ "auth_type": "eth-allowlist", "payload_hex": payload, "domain": domain,
+                "action_hex": action_hex, "config": { "allowlist": [ADDR42] } });
+            parse(&dispatch_verify(&req.to_string(), &r))
+        };
+        let ok = verify(DOMAIN, &format!("0x{ACTION}"));
+        assert_eq!(ok["ok"], true, "{ok}");
+        assert_eq!(ok["identity"], ADDR42);
+        assert_eq!(ok["scheme"], "eth");
+        assert_eq!(verify("account-registry", ACTION)["ok"], false);
+        assert_eq!(verify(DOMAIN, &"ff".repeat(32))["ok"], false);
+    }
+
+    #[test]
+    fn v2_requests_and_bad_domains_are_errors() {
+        let mut m = RlnSign::default();
+        let v2 = m.produce_auth(
+            json!({ "auth_type": "eth-allowlist", "id_commitment_hex": ACTION, "args": { "rate_max": 5 } })
+                .to_string(),
+        );
+        assert!(v2.contains("produce_auth args"), "{v2}");
+        let bad = m.produce_auth(
+            json!({ "auth_type": "eth-allowlist", "domain": "RLN", "action_hex": ACTION })
+                .to_string(),
+        );
+        assert!(bad.contains("expected 1 to 64 bytes of [a-z0-9-]"), "{bad}");
+        assert!(
+            m.store.cached(Kind::Eth).is_none(),
+            "a refused request resolves no key"
+        );
+    }
+
+    #[test]
+    fn peer_signs_nothing_and_identity_reads_args_peer_id() {
+        let mut m = RlnSign::default();
+        let payload = payload_of(&m.produce_auth(produce_req("peer-any", ACTION, None)));
+        assert_eq!(payload, "03");
+        let r = VerifyRegistry::new().scheme(Peer).authoriser(Any);
+        let req = json!({ "auth_type": "peer-any", "payload_hex": payload, "domain": DOMAIN,
+            "action_hex": ACTION, "peer_id": PEER });
+        let v = parse(&dispatch_verify(&req.to_string(), &r));
+        let id =
+            parse(&m.identity(
+                json!({ "auth_type": "peer-any", "args": { "peer_id": PEER } }).to_string(),
+            ));
+        assert_eq!(v["ok"], true, "{v}");
+        assert_eq!(id["id"], parse_peer_id(PEER).unwrap());
+        assert_eq!(
+            v["identity"], id["id"],
+            "identity is what the verifier proves"
+        );
+        assert_eq!(id["source"], "args");
+        assert_eq!(id["auth_type"], "peer-any");
+        assert!(m
+            .identity(json!({ "scheme": "peer" }).to_string())
+            .contains("args.peer_id is required"));
     }
 }

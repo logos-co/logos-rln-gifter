@@ -16,14 +16,14 @@ serde_json = "1"
 hex = "0.4"
 k256 = { version = "0.13", features = ["ecdsa"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
-rln_auth_vector = { git = "https://github.com/logos-co/logos-rln-gifter", tag = "auth-crates-v0.3.1", package = "rln_auth_vector" }
-rln_auth_vectors = { git = "https://github.com/logos-co/logos-rln-gifter", tag = "auth-crates-v0.3.1", package = "rln_auth_vectors", default-features = false, features = ["sign"] }
-zksign_light = { git = "https://github.com/logos-co/logos-rln-gifter", tag = "auth-crates-v0.3.1", package = "zksign_light", default-features = false, features = ["client"] }
+auth_vector = { git = "https://github.com/logos-co/logos-paymaster-crates", rev = "32f4a3a4f962f8d4a8e38f55a52e78023f33230f" }
+auth_vectors = { git = "https://github.com/logos-co/logos-paymaster-crates", rev = "32f4a3a4f962f8d4a8e38f55a52e78023f33230f", default-features = false, features = ["sign"] }
+zksign_light = { git = "https://github.com/logos-co/logos-paymaster-crates", rev = "32f4a3a4f962f8d4a8e38f55a52e78023f33230f", default-features = false, features = ["client"] }
 logos-rust-sdk = { path = "../logos-rust-sdk-src" }
 
 [dev-dependencies]
 base58 = "0.2"
-rln_auth_vectors = { git = "https://github.com/logos-co/logos-rln-gifter", tag = "auth-crates-v0.3.1", package = "rln_auth_vectors", default-features = false, features = ["sign", "verify"] }
+auth_vectors = { git = "https://github.com/logos-co/logos-paymaster-crates", rev = "32f4a3a4f962f8d4a8e38f55a52e78023f33230f", default-features = false, features = ["sign", "verify"] }
 
 [lints.rust]
 unused_lifetimes = "warn"

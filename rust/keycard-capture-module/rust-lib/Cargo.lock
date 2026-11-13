@@ -162,6 +162,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
+name = "auth_vector"
+version = "0.3.1"
+source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=32f4a3a4f962f8d4a8e38f55a52e78023f33230f#32f4a3a4f962f8d4a8e38f55a52e78023f33230f"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "auth_vectors"
+version = "0.2.0"
+source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=32f4a3a4f962f8d4a8e38f55a52e78023f33230f#32f4a3a4f962f8d4a8e38f55a52e78023f33230f"
+dependencies = [
+ "auth_vector",
+ "base58",
+ "hex",
+ "k256",
+ "keycard_attest",
+ "keycard_client",
+ "pow-claim",
+ "rand_core",
+ "serde_json",
+ "sha2",
+ "tiny-keccak",
+ "zksign_light",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -649,7 +679,7 @@ dependencies = [
 [[package]]
 name = "keycard_attest"
 version = "0.2.0"
-source = "git+https://github.com/logos-co/logos-rln-gifter?tag=auth-crates-v0.3.1#4a2aa3ed4096b162b5fc8d8471ccc8e1d994dcac"
+source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=32f4a3a4f962f8d4a8e38f55a52e78023f33230f#32f4a3a4f962f8d4a8e38f55a52e78023f33230f"
 dependencies = [
  "k256",
  "sha2",
@@ -660,17 +690,17 @@ dependencies = [
 name = "keycard_capture_module"
 version = "0.3.1"
 dependencies = [
+ "auth_vector",
+ "auth_vectors",
  "keycard_client",
  "logos-rust-sdk",
- "rln_auth_vector",
- "rln_auth_vectors",
  "serde_json",
 ]
 
 [[package]]
 name = "keycard_client"
 version = "0.1.0"
-source = "git+https://github.com/logos-co/logos-rln-gifter?tag=auth-crates-v0.3.1#4a2aa3ed4096b162b5fc8d8471ccc8e1d994dcac"
+source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=32f4a3a4f962f8d4a8e38f55a52e78023f33230f#32f4a3a4f962f8d4a8e38f55a52e78023f33230f"
 dependencies = [
  "aes",
  "hex",
@@ -708,8 +738,8 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "logos-blockchain-poseidon2"
-version = "0.3.0-rc.5"
-source = "git+https://github.com/logos-blockchain/logos-blockchain?rev=2c652646d74354b2877620bf0bc53b4c4d3f18e4#2c652646d74354b2877620bf0bc53b4c4d3f18e4"
+version = "0.3.5-rc.5"
+source = "git+https://github.com/logos-blockchain/logos-blockchain?rev=f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30#f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30"
 dependencies = [
  "ark-bn254",
  "ark-ff",
@@ -834,13 +864,13 @@ dependencies = [
 [[package]]
 name = "pow-claim"
 version = "0.2.0"
-source = "git+https://github.com/logos-co/logos-rln-gifter?tag=auth-crates-v0.3.1#4a2aa3ed4096b162b5fc8d8471ccc8e1d994dcac"
+source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=32f4a3a4f962f8d4a8e38f55a52e78023f33230f#32f4a3a4f962f8d4a8e38f55a52e78023f33230f"
 dependencies = [
  "ark-ff",
+ "auth_vector",
  "blake2",
  "hex",
  "logos-blockchain-poseidon2",
- "rln_auth_vector",
  "serde",
  "serde_json",
  "ureq",
@@ -912,36 +942,6 @@ checksum = "f8dd2a808d456c4a54e300a23e9f5a67e122c3024119acbfd73e3bf664491cb2"
 dependencies = [
  "hmac",
  "subtle",
-]
-
-[[package]]
-name = "rln_auth_vector"
-version = "0.3.1"
-source = "git+https://github.com/logos-co/logos-rln-gifter?tag=auth-crates-v0.3.1#4a2aa3ed4096b162b5fc8d8471ccc8e1d994dcac"
-dependencies = [
- "hex",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "rln_auth_vectors"
-version = "0.2.0"
-source = "git+https://github.com/logos-co/logos-rln-gifter?tag=auth-crates-v0.3.1#4a2aa3ed4096b162b5fc8d8471ccc8e1d994dcac"
-dependencies = [
- "base58",
- "hex",
- "k256",
- "keycard_attest",
- "keycard_client",
- "pow-claim",
- "rand_core",
- "rln_auth_vector",
- "serde_json",
- "sha2",
- "tiny-keccak",
- "zksign_light",
 ]
 
 [[package]]
@@ -1354,10 +1354,10 @@ dependencies = [
 [[package]]
 name = "zksign_light"
 version = "0.2.0"
-source = "git+https://github.com/logos-co/logos-rln-gifter?tag=auth-crates-v0.3.1#4a2aa3ed4096b162b5fc8d8471ccc8e1d994dcac"
+source = "git+https://github.com/logos-co/logos-paymaster-crates?rev=32f4a3a4f962f8d4a8e38f55a52e78023f33230f#32f4a3a4f962f8d4a8e38f55a52e78023f33230f"
 dependencies = [
+ "auth_vector",
  "hex",
- "rln_auth_vector",
  "serde_json",
  "ureq",
 ]

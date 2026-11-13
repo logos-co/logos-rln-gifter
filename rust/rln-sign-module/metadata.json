@@ -1,7 +1,7 @@
 {
   "name": "rln_sign_module",
   "version": "0.2.1",
-  "description": "The RLN gifter's producer (rln_auth_vector produce_auth): eth and lez module-owned keys, logos zkSign by a node key, pow-claim discovery — every composition but the PC/SC keycard",
+  "description": "The RLN gifter's producer (auth_vector v3 produce_auth, bound to the service domain + action): eth and lez module-owned keys, logos zkSign by a node key, pow-claim discovery, peer — every composition but the PC/SC keycard",
   "author": "Logos",
   "type": "core",
   "interface": "cdylib",

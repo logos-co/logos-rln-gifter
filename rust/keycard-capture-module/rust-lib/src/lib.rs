@@ -4,20 +4,22 @@
 // and from the gifter side so a headless allocator never does either.
 // FEATURE: RLN membership gifter keycard capture module (client-side PC/SC)
 
+use auth_vector::{dispatch_produce, ProduceRegistry};
+use auth_vectors::claimant::{AllowlistClaimant, AttestationClaimant};
+use auth_vectors::signer::KeycardSigner;
 use keycard_client::reader_card_present;
-use rln_auth_vector::{dispatch_produce, ProduceRegistry};
-use rln_auth_vectors::claimant::{AllowlistClaimant, AttestationClaimant};
-use rln_auth_vectors::signer::KeycardSigner;
 use serde_json::json;
 
 // OWNERSHIP: the generated host keeps the instance in a process-lifetime any-box, so the module owns all its data.
 pub trait KeycardCaptureModule: Send + 'static {
-    /// rln_auth_vector PRODUCE_METHOD for `keycard-allowlist` and
-    /// `keycard-attestation`: IDENTIFY_CARD bound to the request's binding
-    /// (the card only proves the holder owns a genuine card — the identity
-    /// comes from the caller). IDENTIFY_CARD is a public plain-channel
-    /// command — no pairing, no PIN. One JSON-string arg (ProduceRequest) →
-    /// `{"payload_hex"}` or `{"error"}`.
+    /// auth_vector PRODUCE_METHOD (contract v3) for `keycard-allowlist` and
+    /// `keycard-attestation`: IDENTIFY_CARD with the binding digest of the
+    /// request's `domain`, `action_hex` and `args.audience` (default "") as
+    /// the challenge, so the card proves the holder owns a genuine card for
+    /// that one action. IDENTIFY_CARD is a public plain-channel command — no
+    /// pairing, no PIN. One JSON-string arg, the ProduceRequest
+    /// `{"auth_type","domain","action_hex","args"?}` → `{"payload_hex"}` or
+    /// `{"error"}`.
     fn produce_auth(&mut self, args_json: String) -> String;
     /// Is a Keycard present at the reader? `{present}` — no card session.
     fn card_status(&mut self) -> String;
